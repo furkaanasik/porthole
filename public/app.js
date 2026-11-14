@@ -48,9 +48,9 @@
     ws.onopen = function () {
       retries = 0;
       showStatus(null);
-      detectVideo(function (ok) {
+      detectVideo(function (ok, why) {
         setVideoMode(ok);
-        send({ t: 'stream', video: ok });
+        send({ t: 'stream', video: ok, why: why });
         sendSize(true);
         sendHd();
       });
@@ -489,11 +489,13 @@
   var waitKey = true;
   var vts = 0;
 
+  // cb(ok, why); why ends up in the server log, to tell which browsers fall back and why.
   function detectVideo(cb) {
-    if (!window.VideoDecoder || /[?&]frames\b/.test(location.search)) return cb(false);
+    if (/[?&]frames\b/.test(location.search)) return cb(false, 'forced');
+    if (!window.VideoDecoder) return cb(false, 'no WebCodecs');
     window.VideoDecoder.isConfigSupported({ codec: 'avc1.64002a' }).then(
-      function (r) { cb(!!r.supported); },
-      function () { cb(false); }
+      function (r) { cb(!!r.supported, r.supported ? '' : 'no H.264 decoder'); },
+      function (err) { cb(false, 'check failed: ' + err); }
     );
   }
 

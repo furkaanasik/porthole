@@ -451,9 +451,9 @@ const handlers = {
   videoStop: () => video.stop(),
   // The client says whether it decodes H.264 (WebCodecs); the iPad gets JPEG/PNG frames.
   stream: async (m) => {
+    log(`stream mode: ${m.video ? 'h264' : `frames (${m.why || 'decoder failed'})`}`);
     if (client.video === !!m.video) return;
     client.video = !!m.video;
-    log(`stream mode: ${client.video ? 'h264' : 'frames'}`);
     await stopStream();
     await startStream();
   },
@@ -521,6 +521,9 @@ const server = http.createServer((req, res) => {
       res.writeHead(500);
       return res.end();
     }
+    // Cloudflare caches .js and .css and tells browsers to keep them for 4 hours, whatever the
+    // origin says; a version in their URLs makes a new client load new files.
+    if (pathname === '/') body = String(body).replace(/(src|href)="(app\.js|style\.css)"/g, `$1="$2?v=${CLIENT_VERSION}"`);
     res.writeHead(200, { 'Content-Type': entry[1], 'Cache-Control': 'no-cache' });
     res.end(body);
   });
