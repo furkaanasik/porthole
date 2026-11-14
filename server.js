@@ -9,6 +9,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { chromium } = require('playwright');
 const { WebSocketServer } = require('ws');
+const audio = require('./audio');
+const video = require('./video');
 
 const PORT = Number(process.env.PORT) || 8091;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -33,6 +35,8 @@ const STATIC = {
   '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
   '/icon.png': ['icon.png', 'image/png'],
+  // Only desktop browsers load this: Safari plays HLS natively.
+  '/hls.js': [require.resolve('hls.js/dist/hls.min.js'), 'application/javascript; charset=utf-8'],
 };
 
 let context;
@@ -40,6 +44,7 @@ let page; // the tab currently shown on the iPad
 let viewport = { width: 1024, height: 690 };
 let client = null; // { ws, cdp }
 let streamToken = 0;
+let userAgent;
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 
@@ -346,6 +351,21 @@ const handlers = {
       await page.keyboard.press(m.key);
       refreshSoon();
     }),
+  video: async () => {
+    const p = page;
+    send({ t: 'toast', text: 'Video hazırlanıyor…' });
+    try {
+      const v = await video.start(p.url(), { cookies: await context.cookies(), userAgent });
+      // The iPad plays it now; the page's own copy would only burn CPU.
+      await withTimeout(p.evaluate(() => document.querySelectorAll('video, audio').forEach((el) => el.pause())), 1000).catch(() => {});
+      log(`video: ${v.title} (${v.transcoding ? 'transcoding' : 'copy'}${v.live ? ', live' : ''})`);
+      send({ t: 'video', ...v });
+    } catch (err) {
+      log('video:', err.message);
+      send({ t: 'video', error: err.message });
+    }
+  },
+  videoStop: () => video.stop(),
   // Wide desktop windows get a capped viewport with the same aspect ratio, shown upscaled:
   // every pixel costs CPU on this 2-core server.
   resize: async (m) => {
@@ -384,6 +404,8 @@ function onMessage(raw) {
 
 const server = http.createServer((req, res) => {
   const pathname = req.url.split('?')[0];
+  const videoPath = pathname.match(/^\/video\/(\w+)\/([^/]+)$/);
+  if (videoPath && req.method === 'GET') return video.serve(videoPath[1], videoPath[2], res);
   if (pathname === '/healthz') {
     res.writeHead(page ? 200 : 503, { 'Content-Type': 'text/plain' });
     return res.end(page ? 'ok' : 'starting');
@@ -393,7 +415,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     return res.end('not found');
   }
-  fs.readFile(path.join(PUBLIC_DIR, entry[0]), (err, body) => {
+  fs.readFile(path.resolve(PUBLIC_DIR, entry[0]), (err, body) => {
     if (err) {
       res.writeHead(500);
       return res.end();
@@ -412,11 +434,12 @@ server.on('upgrade', (req, socket, head) => {
   try {
     sameOrigin = !origin || new URL(origin).host === req.headers.host;
   } catch {}
-  if (req.url !== '/ws' || !sameOrigin || !page) {
+  if (!['/ws', '/audio'].includes(req.url) || !sameOrigin || !page) {
     socket.destroy();
     return;
   }
-  wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws));
+  // Audio has its own socket so a large frame never holds up sound.
+  wss.handleUpgrade(req, socket, head, (ws) => (req.url === '/audio' ? audio.addListener(ws) : onConnection(ws)));
 });
 
 function onConnection(ws) {
@@ -463,19 +486,21 @@ async function main() {
   for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
     fs.rmSync(path.join(profileDir, name), { force: true });
   }
+  userAgent = realChromeUserAgent();
   context = await chromium.launchPersistentContext(profileDir, {
     headless: true,
     // Full Chromium in new headless mode, without the automation flag: search engines block
     // the headless shell and navigator.webdriver.
     channel: 'chromium',
-    ignoreDefaultArgs: ['--enable-automation'],
+    // Headless Chromium is muted by default; page audio goes to PulseAudio for the iPad.
+    ignoreDefaultArgs: ['--enable-automation', '--mute-audio'],
     // Smooth scrolling animates every wheel step over ~150 ms, which the iPad sees as lag.
     args: ['--disable-blink-features=AutomationControlled', '--disable-smooth-scrolling'],
     viewport,
     deviceScaleFactor: 1,
     locale: 'tr-TR',
     timezoneId: 'Europe/Istanbul',
-    userAgent: realChromeUserAgent(),
+    userAgent,
   });
   context.on('close', () => {
     log('browser closed, exiting');
@@ -491,6 +516,7 @@ async function main() {
 process.on('unhandledRejection', (err) => log('unhandled:', err && err.message));
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, async () => {
+    video.stop();
     await context?.close().catch(() => {});
     process.exit(0);
   });

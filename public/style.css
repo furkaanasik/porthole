@@ -184,6 +184,64 @@ html, body {
   bottom: 24px;
 }
 
+/* Sound button: muted shows a cross, on shows sound waves in blue. */
+#sound .waves,
+#sound.on .cross {
+  display: none;
+}
+
+#sound.on .waves {
+  display: inline;
+}
+
+#sound.on,
+#video.busy {
+  color: #4c9eff;
+}
+
+#player {
+  position: absolute;
+  top: 50px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 15;
+  background: #000;
+}
+
+#playerBar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 54px;
+  padding: 6px;
+  box-sizing: border-box;
+  display: -webkit-flex;
+  display: flex;
+  -webkit-align-items: center;
+  align-items: center;
+}
+
+#playerTitle {
+  -webkit-flex: 1;
+  flex: 1;
+  overflow: hidden;
+  padding: 0 8px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#playerVideo {
+  position: absolute;
+  top: 54px;
+  left: 0;
+  width: 100%;
+  height: -webkit-calc(100% - 54px);
+  height: calc(100% - 54px);
+  background: #000;
+}
+
 .hidden {
   display: none !important;
 }

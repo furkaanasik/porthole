@@ -96,6 +96,8 @@
       else if (document.activeElement !== typeInput) closeTypebar();
     } else if (m.t === 'toast') {
       toast(m.text);
+    } else if (m.t === 'video') {
+      onVideo(m);
     }
   }
 
@@ -435,6 +437,170 @@
   onClick('typeClose', function () {
     flushType();
     closeTypebar();
+  });
+
+  // ----------------------------------------------------------------- sound
+
+  // Page audio arrives as 22.05 kHz mono 16-bit PCM in 100 ms chunks on its own socket. Each chunk
+  // is scheduled right after the previous one, with a small cushion against network jitter.
+  // iOS only lets Web Audio start from a tap, and its silent switch mutes it.
+  var AudioCtx = window.AudioContext || window.webkitAudioContext;
+  var soundBtn = $('sound');
+  var audioCtx = null;
+  var audioWs = null;
+  var audioRetry = null;
+  var playAt = 0;
+  var soundOn = false;
+  var CUSHION = 0.15;
+  var MAX_AHEAD = 0.8;
+
+  function wantSound() {
+    try { return localStorage.getItem('pencere.sound') === '1'; } catch (e) { return false; }
+  }
+
+  function rememberSound(on) {
+    try { localStorage.setItem('pencere.sound', on ? '1' : '0'); } catch (e) {}
+  }
+
+  // Must run inside a tap handler: playing a silent buffer there is what unlocks audio on iOS.
+  function unlockAudio() {
+    if (!AudioCtx) return false;
+    if (!audioCtx) audioCtx = new AudioCtx();
+    if (audioCtx.resume) audioCtx.resume();
+    var src = audioCtx.createBufferSource();
+    src.buffer = audioCtx.createBuffer(1, 1, 22050);
+    src.connect(audioCtx.destination);
+    if (src.start) src.start(0); else src.noteOn(0);
+    return true;
+  }
+
+  function playChunk(data) {
+    if (!audioCtx || !soundOn) return;
+    var pcm = new Int16Array(data);
+    var buf = audioCtx.createBuffer(1, pcm.length, 22050);
+    var out = buf.getChannelData(0);
+    for (var i = 0; i < pcm.length; i++) out[i] = pcm[i] / 32768;
+    var t = audioCtx.currentTime;
+    // After a silent gap, or when chunks arrive late, start again with a fresh cushion.
+    if (playAt < t) playAt = t + CUSHION;
+    // Too much queued up means delay is growing; drop this chunk to catch up.
+    if (playAt > t + MAX_AHEAD) return;
+    var src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    if (src.start) src.start(playAt); else src.noteOn(playAt);
+    playAt += buf.duration;
+  }
+
+  function connectAudio() {
+    clearTimeout(audioRetry);
+    if (!soundOn || audioWs) return;
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    audioWs = new WebSocket(proto + '//' + location.host + '/audio');
+    audioWs.binaryType = 'arraybuffer';
+    audioWs.onmessage = function (e) { playChunk(e.data); };
+    audioWs.onclose = function () {
+      audioWs = null;
+      if (soundOn) audioRetry = setTimeout(connectAudio, 2000);
+    };
+  }
+
+  function setSound(on) {
+    if (on && !unlockAudio()) {
+      toast('Bu tarayıcı sesi çalamıyor.');
+      on = false;
+    }
+    soundOn = on;
+    soundBtn.className = on ? 'btn on' : 'btn';
+    if (on) {
+      connectAudio();
+    } else {
+      clearTimeout(audioRetry);
+      if (audioWs) audioWs.close();
+      playAt = 0;
+    }
+  }
+
+  onClick('sound', function () {
+    setSound(!soundOn);
+    rememberSound(soundOn);
+    if (soundOn) toast('Ses açık. iPad sessiz modundaysa ses gelmez.');
+  });
+
+  // With sound left on last time, the first tap on the page turns it back on.
+  if (wantSound()) {
+    var resumeSound = function () {
+      screenEl.removeEventListener('touchend', resumeSound, false);
+      screenEl.removeEventListener('click', resumeSound, false);
+      if (!soundOn) setSound(true);
+    };
+    screenEl.addEventListener('touchend', resumeSound, false);
+    screenEl.addEventListener('click', resumeSound, false);
+  }
+
+  // ----------------------------------------------------------------- video
+
+  // The server turns the page's video into HLS; Safari plays it in its own hardware player.
+  var player = $('player');
+  var playerVideo = $('playerVideo');
+  var videoBtn = $('video');
+  var videoWaiting = false;
+  var hls = null;
+
+  onClick('video', function () {
+    if (videoWaiting) return;
+    videoWaiting = true;
+    videoBtn.className = 'btn busy';
+    send({ t: 'video' });
+  });
+
+  function onVideo(m) {
+    videoWaiting = false;
+    videoBtn.className = 'btn';
+    if (m.error) {
+      toast(m.error);
+      return;
+    }
+    $('playerTitle').textContent = m.title + (m.live ? ' (canlı)' : '');
+    player.className = '';
+    if (playerVideo.canPlayType('application/vnd.apple.mpegurl')) {
+      playerVideo.src = m.src;
+      playerVideo.play();
+    } else {
+      playWithHlsJs(m.src);
+    }
+    toastEl.className = 'hidden';
+  }
+
+  // Desktop Chrome and Firefox have no native HLS.
+  function playWithHlsJs(src) {
+    function go() {
+      if (!window.Hls || !window.Hls.isSupported()) {
+        toast('Bu tarayıcı videoyu oynatamıyor.');
+        return;
+      }
+      hls = new window.Hls();
+      hls.loadSource(src);
+      hls.attachMedia(playerVideo);
+      playerVideo.play();
+    }
+    if (window.Hls) return go();
+    var s = document.createElement('script');
+    s.src = 'hls.js';
+    s.onload = go;
+    document.body.appendChild(s);
+  }
+
+  onClick('playerClose', function () {
+    playerVideo.pause();
+    if (hls) {
+      hls.destroy();
+      hls = null;
+    }
+    playerVideo.removeAttribute('src');
+    playerVideo.load();
+    player.className = 'hidden';
+    send({ t: 'videoStop' });
   });
 
   // ------------------------------------------------------------ indicators
