@@ -439,7 +439,13 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
   // Audio has its own socket so a large frame never holds up sound.
-  wss.handleUpgrade(req, socket, head, (ws) => (req.url === '/audio' ? audio.addListener(ws) : onConnection(ws)));
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    // Every socket answers the keepalive ping below, or it is cut off as dead.
+    ws.isAlive = true;
+    ws.on('pong', () => (ws.isAlive = true));
+    if (req.url === '/audio') audio.addListener(ws);
+    else onConnection(ws);
+  });
 });
 
 function onConnection(ws) {
@@ -451,8 +457,6 @@ function onConnection(ws) {
   const me = { ws, cdp: null };
   client = me;
   log('client connected');
-  ws.isAlive = true;
-  ws.on('pong', () => (ws.isAlive = true));
   ws.on('message', (data, isBinary) => {
     if (!isBinary) onMessage(data.toString());
   });
