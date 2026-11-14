@@ -44,16 +44,21 @@
     replaced = false;
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + '/ws');
-    ws.binaryType = 'blob';
+    ws.binaryType = window.VideoDecoder ? 'arraybuffer' : 'blob';
     ws.onopen = function () {
       retries = 0;
       showStatus(null);
-      sendSize(true);
-      sendHd();
+      detectVideo(function (ok) {
+        setVideoMode(ok);
+        send({ t: 'stream', video: ok });
+        sendSize(true);
+        sendHd();
+      });
     };
     ws.onmessage = function (e) {
       if (typeof e.data === 'string') handle(JSON.parse(e.data));
-      else showFrame(e.data, frameMetaY, frameMetaW);
+      else if (videoMode) onVideoChunk(e.data);
+      else showFrame(e.data instanceof Blob ? e.data : new Blob([e.data]), frameMetaY, frameMetaW);
     };
     ws.onclose = function (e) {
       ws = null;
@@ -100,6 +105,10 @@
       toast(m.text);
     } else if (m.t === 'video') {
       onVideo(m);
+    } else if (m.t === 'vconfig') {
+      configureDecoder(m);
+    } else if (m.t === 'vfail') {
+      setVideoMode(false);
     }
   }
 
@@ -197,9 +206,12 @@
     front.style.transform = t;
   }
 
+  // Below 100% browser zoom (devicePixelRatio < 1), ask for the size in screen pixels, so each
+  // pixel of the picture lands on exactly one pixel of the screen instead of being resampled.
   function sendSize(force) {
-    var w = screenEl.clientWidth;
-    var h = screenEl.clientHeight;
+    var d = Math.min(1, window.devicePixelRatio || 1);
+    var w = Math.round(screenEl.clientWidth * d);
+    var h = Math.round(screenEl.clientHeight * d);
     if (!force && w === viewW && h === viewH) return;
     viewW = w;
     viewH = h;
@@ -340,7 +352,7 @@
   // sy tells the server which scroll position the tapped frame showed, so it can line the page
   // up with what the user saw before clicking.
   function sendTap(x, y) {
-    send({ t: 'tap', x: x, y: y, sy: frameScrollY });
+    send({ t: 'tap', x: x, y: y, sy: videoMode ? undefined : frameScrollY });
   }
 
   // Mouse and wheel, for testing from a desktop browser.
@@ -455,7 +467,7 @@
   try { hdOn = localStorage.getItem('pencere.hd') === '1'; } catch (e) {}
 
   function sendHd() {
-    hdBtn.className = hdOn ? 'btn on' : 'btn';
+    hdBtn.className = (hdOn ? 'btn on' : 'btn') + (videoMode ? ' hidden' : '');
     send({ t: 'hd', on: hdOn });
   }
 
@@ -465,6 +477,69 @@
     sendHd();
     toast(hdOn ? 'HD açık: kaydırırken de tam kalite.' : 'HD kapalı: kaydırırken akıcılık öncelikli.');
   });
+
+  // ----------------------------------------------------------------- video
+
+  // Browsers with WebCodecs get the page as live H.264 (see vstream.js): sharp while scrolling, at
+  // 30 fps. The iPad has no WebCodecs and stays on JPEG/PNG frames. ?frames forces frames.
+  var canvas = $('canvas');
+  var vctx = canvas.getContext('2d');
+  var videoMode = false;
+  var decoder = null;
+  var waitKey = true;
+  var vts = 0;
+
+  function detectVideo(cb) {
+    if (!window.VideoDecoder || /[?&]frames\b/.test(location.search)) return cb(false);
+    window.VideoDecoder.isConfigSupported({ codec: 'avc1.64002a' }).then(
+      function (r) { cb(!!r.supported); },
+      function () { cb(false); }
+    );
+  }
+
+  function setVideoMode(on) {
+    videoMode = on;
+    canvas.className = on ? 'frame' : 'frame hidden';
+    front.style.display = back.style.display = on ? 'none' : '';
+    if (!on && decoder) {
+      if (decoder.state !== 'closed') decoder.close();
+      decoder = null;
+    }
+    hdBtn.className = (hdOn ? 'btn on' : 'btn') + (on ? ' hidden' : '');
+  }
+
+  function configureDecoder(m) {
+    if (decoder && decoder.state !== 'closed') decoder.close();
+    canvas.width = m.cw;
+    canvas.height = m.ch;
+    framePageW = m.w;
+    decoder = new window.VideoDecoder({
+      output: function (frame) {
+        vctx.drawImage(frame, 0, 0);
+        frame.close();
+      },
+      error: function (err) {
+        // A decoder that broke mid-stream: go back to frames rather than show a frozen picture.
+        toast('Video akışı çözülemedi, kare moduna geçildi.');
+        setVideoMode(false);
+        send({ t: 'stream', video: false });
+      }
+    });
+    decoder.configure({ codec: m.codec, optimizeForLatency: true });
+    waitKey = true;
+  }
+
+  function onVideoChunk(buf) {
+    if (!decoder || decoder.state !== 'configured') return;
+    var bytes = new Uint8Array(buf);
+    var key = bytes[0] === 1;
+    // A decoder that fell behind would add delay with every frame; skip to the next keyframe.
+    if (decoder.decodeQueueSize > 15) waitKey = true;
+    if (waitKey && !key) return;
+    waitKey = false;
+    vts += 33333;
+    decoder.decode(new window.EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: vts, data: bytes.subarray(1) }));
+  }
 
   // ----------------------------------------------------------------- sound
 

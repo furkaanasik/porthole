@@ -1,16 +1,17 @@
 'use strict';
 
-// One headless Chromium tab, streamed as JPEG frames over a WebSocket to a
-// single client (an old iPad). The client sends taps, scrolls and text back.
+// One Chromium tab, streamed over a WebSocket to a single client: as H.264 video to browsers with
+// WebCodecs, as JPEG/PNG frames to the old iPad. The client sends taps, scrolls and text back.
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { spawn } = require('child_process');
 const { chromium } = require('playwright');
 const { WebSocketServer } = require('ws');
 const audio = require('./audio');
 const video = require('./video');
+const vstream = require('./vstream');
 
 const PORT = Number(process.env.PORT) || 8091;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -24,6 +25,7 @@ const QUALITY = Number(process.env.QUALITY) || 60;
 const IDLE_QUALITY = Number(process.env.IDLE_QUALITY) || 85;
 const STREAM_WIDTH = Number(process.env.STREAM_WIDTH) || 1280;
 const MAX_TABS = 5;
+const CDP_PORT = Number(process.env.CDP_PORT) || 9222;
 const MAX_WIDTH = Number(process.env.MAX_WIDTH) || 1920;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -52,20 +54,9 @@ let hd = false; // the client asked for full quality even while scrolling
 let client = null; // { ws, cdp }
 let streamToken = 0;
 let userAgent;
+let chrome; // the Chromium process
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
-
-// Headless Chromium announces itself as "HeadlessChrome", which many sites block.
-function realChromeUserAgent() {
-  let version = '140.0.0.0';
-  try {
-    const out = execFileSync(chromium.executablePath(), ['--version'], { encoding: 'utf8' });
-    version = (out.match(/(\d+\.\d+\.\d+\.\d+)/) || [])[1] || version;
-  } catch (err) {
-    log('could not read Chromium version:', err.message);
-  }
-  return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} Safari/537.36`;
-}
 
 function toUrl(input) {
   const text = String(input || '').trim();
@@ -98,6 +89,7 @@ if (process.env.DEBUG) {
 }
 
 async function stopStream() {
+  vstream.stop();
   if (!client || !client.cdp) return;
   const cdp = client.cdp;
   client.cdp = null;
@@ -105,9 +97,33 @@ async function stopStream() {
   await cdp.detach().catch(() => {});
 }
 
+function startVideo() {
+  const ws = client.ws;
+  vstream.start(
+    ws,
+    viewport.width,
+    viewport.height,
+    (cfg) => send({ t: 'vconfig', codec: cfg.codec, w: viewport.width, h: viewport.height, cw: cfg.width, ch: cfg.height }),
+    (code) => {
+      log('video stream stopped:', code);
+      // Fall back to frames rather than leave a dead screen.
+      if (client && client.ws === ws && client.video) {
+        client.video = false;
+        send({ t: 'vfail' });
+        startStream();
+      }
+    },
+  );
+}
+
 async function startStream() {
   if (!client || !page) return;
   const token = ++streamToken;
+  if (client.video) {
+    // Kiosk mode shows the front tab at the top-left of the virtual screen; capture that.
+    if (client.cdp) await stopScreencastOnly();
+    return startVideo();
+  }
   await stopStream();
   const ws = client.ws;
   const cdp = await context.newCDPSession(page);
@@ -172,6 +188,13 @@ function restartScreencast() {
     .send('Page.stopScreencast')
     .then(() => cdp.send('Page.startScreencast', screencastParams()))
     .catch(() => {});
+}
+
+async function stopScreencastOnly() {
+  const cdp = client.cdp;
+  client.cdp = null;
+  await cdp.send('Page.stopScreencast').catch(() => {});
+  await cdp.detach().catch(() => {});
 }
 
 // Raw CDP rather than page.screenshot: Playwright injects a caret-hiding style for screenshots,
@@ -426,6 +449,14 @@ const handlers = {
     }
   },
   videoStop: () => video.stop(),
+  // The client says whether it decodes H.264 (WebCodecs); the iPad gets JPEG/PNG frames.
+  stream: async (m) => {
+    if (client.video === !!m.video) return;
+    client.video = !!m.video;
+    log(`stream mode: ${client.video ? 'h264' : 'frames'}`);
+    await stopStream();
+    await startStream();
+  },
   hd: (m) => {
     if (hd === !!m.on) return;
     hd = !!m.on;
@@ -440,9 +471,10 @@ const handlers = {
       h = Math.round((h * MAX_WIDTH) / w);
       w = MAX_WIDTH;
     }
-    const width = Math.max(320, w);
-    const height = Math.max(240, Math.min(1920, h));
-    if (width === viewport.width && height === viewport.height && client.cdp) return;
+    // Even sizes for H.264, and no taller than the 1920x1080 virtual screen.
+    const width = Math.max(320, w) & ~1;
+    const height = Math.max(240, Math.min(1080, h)) & ~1;
+    if (width === viewport.width && height === viewport.height && (client.cdp || vstream.running())) return;
     // Pixel density is not applied (Playwright fixes it per context); logged to see who would need it.
     log(`viewport ${width}x${height}, screen dpr ${m.dpr}`);
     viewport = { width, height };
@@ -523,7 +555,7 @@ function onConnection(ws) {
     stopStream();
     old.ws.close(4000, 'replaced');
   }
-  const me = { ws, cdp: null };
+  const me = { ws, cdp: null, video: false };
   hd = false; // the new client says what it wants right after connecting
   client = me;
   log('client connected');
@@ -553,6 +585,65 @@ setInterval(() => {
   }
 }, 25000);
 
+// Pencere starts Chromium itself rather than through Playwright's launcher: Playwright resizes
+// headful windows to fit the viewport, which drops them out of kiosk mode. In kiosk mode (openbox
+// applies the fullscreen) every window, popups included, is chromeless at the top-left of the
+// virtual screen, which is what vstream.js captures. Playwright then connects over CDP.
+function launchChromium(profileDir) {
+  const args = [
+    '--kiosk',
+    '--window-position=0,0',
+    '--window-size=1920,1080',
+    `--user-data-dir=${profileDir}`,
+    `--remote-debugging-port=${CDP_PORT}`,
+    '--remote-debugging-address=127.0.0.1',
+    '--no-sandbox',
+    '--lang=tr-TR',
+    // From Playwright's own launch switches: no first-run UI, infobars, sync or updates.
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-infobars',
+    '--disable-search-engine-choice-screen',
+    '--disable-sync',
+    '--disable-component-update',
+    '--disable-breakpad',
+    '--disable-default-apps',
+    '--disable-dev-shm-usage',
+    '--password-store=basic',
+    '--force-color-profile=srgb',
+    '--enable-unsafe-swiftshader',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-hang-monitor',
+    // Browser bubbles would be drawn over the page in the video and cannot be clicked.
+    '--disable-features=Translate,MediaRouter,LensOverlay,DestroyProfileOnBrowserClose',
+    '--deny-permission-prompts',
+    '--hide-crash-restore-bubble',
+    // Search engines block navigator.webdriver.
+    '--disable-blink-features=AutomationControlled',
+    // Smooth scrolling animates every wheel step over ~150 ms, which feels like lag remotely.
+    '--disable-smooth-scrolling',
+    'about:blank',
+  ];
+  const proc = spawn(chromium.executablePath(), args, { stdio: ['ignore', 'ignore', DEBUG ? 'inherit' : 'ignore'] });
+  proc.on('exit', (code) => {
+    log('chromium exited:', code);
+    process.exit(1);
+  });
+  return proc;
+}
+
+async function connectChromium() {
+  for (let i = 0; ; i++) {
+    try {
+      return await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
+    } catch (err) {
+      if (i >= 50) throw err;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+}
+
 async function main() {
   const profileDir = path.join(DATA_DIR, 'profile');
   // A recreated container has a new hostname, and Chromium refuses a profile whose lock names
@@ -560,29 +651,18 @@ async function main() {
   for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
     fs.rmSync(path.join(profileDir, name), { force: true });
   }
-  userAgent = realChromeUserAgent();
-  context = await chromium.launchPersistentContext(profileDir, {
-    headless: true,
-    // Full Chromium in new headless mode, without the automation flag: search engines block
-    // the headless shell and navigator.webdriver.
-    channel: 'chromium',
-    // Headless Chromium is muted by default; page audio goes to PulseAudio for the iPad.
-    ignoreDefaultArgs: ['--enable-automation', '--mute-audio'],
-    // Smooth scrolling animates every wheel step over ~150 ms, which the iPad sees as lag.
-    args: ['--disable-blink-features=AutomationControlled', '--disable-smooth-scrolling'],
-    viewport,
-    deviceScaleFactor: 1,
-    locale: 'tr-TR',
-    timezoneId: 'Europe/Istanbul',
-    userAgent,
-  });
-  context.on('close', () => {
+  chrome = launchChromium(profileDir);
+  const browser = await connectChromium();
+  browser.on('disconnected', () => {
     log('browser closed, exiting');
     process.exit(1);
   });
+  context = browser.contexts()[0];
   context.on('page', onNewPage);
   for (const p of context.pages()) wirePage(p);
   page = context.pages()[0] || (await context.newPage());
+  await page.setViewportSize(viewport).catch(() => {});
+  userAgent = await page.evaluate(() => navigator.userAgent);
   await page.goto(HOME_URL, { waitUntil: 'commit' }).catch((err) => log('goto:', err.message));
   server.listen(PORT, process.env.HOST || '0.0.0.0', () => log(`listening on :${PORT}`));
 }
@@ -591,7 +671,8 @@ process.on('unhandledRejection', (err) => log('unhandled:', err && err.message))
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, async () => {
     video.stop();
-    await context?.close().catch(() => {});
+    vstream.stop();
+    chrome?.kill('SIGTERM');
     process.exit(0);
   });
 }

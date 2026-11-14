@@ -108,7 +108,8 @@ html, body {
   background: #fff;
 }
 
-/* Two stacked frames: the next JPEG decodes in the hidden one, then they swap. */
+/* Two stacked frames: the next JPEG decodes in the hidden one, then they swap. The canvas shows
+   the H.264 stream instead, where the browser can decode it. */
 .frame {
   position: absolute;
   top: 0;
