@@ -5,7 +5,8 @@
   function $(id) { return document.getElementById(id); }
 
   var screenEl = $('screen');
-  var frame = $('frame');
+  var front = $('frameA');
+  var back = $('frameB');
   var address = $('address');
   var typebar = $('typebar');
   var typeInput = $('typeInput');
@@ -51,7 +52,7 @@
     };
     ws.onmessage = function (e) {
       if (typeof e.data === 'string') handle(JSON.parse(e.data));
-      else showFrame(e.data);
+      else showFrame(e.data, frameMetaY);
     };
     ws.onclose = function (e) {
       ws = null;
@@ -77,9 +78,12 @@
   }, false);
 
   function handle(m) {
-    if (m.t === 'state') {
+    if (m.t === 'f') {
+      frameMetaY = m.y;
+    } else if (m.t === 'state') {
       if (!editingAddress && m.url) address.value = m.url;
       if (m.title) document.title = m.title;
+      if (m.loading) resetPrediction();
       setLoading(m.loading);
     } else if (m.t === 'focus') {
       if (m.field) openTypebar(m.field);
@@ -93,27 +97,91 @@
 
   // Decode one JPEG at a time and keep only the newest waiting one, so a slow iPad skips frames instead of lagging.
   var decoding = false;
-  var nextBlob = null;
+  var next = null; // { blob, y }
   var shownUrl = null;
+  var frameMetaY = 0; // scroll offset the server announced for the next binary frame
+  var frameScrollY = 0; // scroll offset of the frame on screen
 
-  function showFrame(blob) {
+  function showFrame(blob, y) {
     if (decoding) {
-      nextBlob = blob;
+      next = { blob: blob, y: y };
       return;
     }
     decoding = true;
     var url = URLs.createObjectURL(blob);
-    frame.onload = frame.onerror = function () {
+    back.onload = back.onerror = function () {
+      // Swap the decoded frame in and position it in the same task, so no frame paints unaligned.
+      var shown = back;
+      back = front;
+      front = shown;
+      onFrameShown(y);
+      front.style.visibility = 'visible';
+      back.style.visibility = 'hidden';
       if (shownUrl) URLs.revokeObjectURL(shownUrl);
       shownUrl = url;
       decoding = false;
-      if (nextBlob) {
-        var b = nextBlob;
-        nextBlob = null;
-        showFrame(b);
+      if (next) {
+        var n = next;
+        next = null;
+        showFrame(n.blob, n.y);
       }
     };
-    frame.src = url;
+    back.src = url;
+  }
+
+  // ------------------------------------------------------ scroll prediction
+
+  // The finger moves the current frame at once; each new frame carries the page's real scroll offset,
+  // so the remaining shift shrinks to zero as the server catches up.
+  var predictY = null; // where the remote page should end up; null when idle
+  var gesture = null; // { startY, sent, staleFrames, off }
+  var settleTimer = null;
+
+  function beginGesture() {
+    clearTimeout(settleTimer);
+    if (!gesture) {
+      gesture = { startY: frameScrollY, sent: 0, staleFrames: 0, off: false };
+      predictY = null;
+    }
+  }
+
+  // Once the server has had time to catch up, drop whatever shift is left (end of page, inner scroller).
+  function endGesture() {
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(resetPrediction, 500);
+  }
+
+  function resetPrediction() {
+    clearTimeout(settleTimer);
+    gesture = null;
+    predictY = null;
+    renderOffset();
+  }
+
+  function predict(dy) {
+    if (!gesture || gesture.off) return;
+    if (predictY === null) predictY = frameScrollY;
+    predictY = Math.max(0, predictY + dy);
+    gesture.sent += Math.abs(dy);
+    renderOffset();
+  }
+
+  function onFrameShown(y) {
+    frameScrollY = y;
+    // The root never moved although we scrolled: an inner element scrolls, so stop shifting the frame.
+    if (gesture && !gesture.off && gesture.sent > 80 && y === gesture.startY && ++gesture.staleFrames >= 3) {
+      gesture.off = true;
+    }
+    renderOffset();
+  }
+
+  function renderOffset() {
+    var off = predictY === null || !gesture || gesture.off ? 0 : predictY - frameScrollY;
+    var max = screenEl.clientHeight * 0.4;
+    off = Math.round(Math.max(-max, Math.min(max, off)));
+    var t = off ? 'translate3d(0,' + -off + 'px,0)' : '';
+    front.style.webkitTransform = t;
+    front.style.transform = t;
   }
 
   function sendSize(force) {
@@ -149,7 +217,8 @@
     scrollDX += dx;
     scrollDY += dy;
     scrollAt = { x: x, y: y };
-    if (!flushTimer) flushTimer = setTimeout(flushScroll, 40);
+    predict(dy);
+    if (!flushTimer) flushTimer = setTimeout(flushScroll, 33);
   }
 
   function flushScroll() {
@@ -164,7 +233,10 @@
   var momentum = null;
 
   function startMomentum(x, y, vx, vy) {
-    if (Math.abs(vx) < 0.2 && Math.abs(vy) < 0.2) return;
+    if (Math.abs(vx) < 0.2 && Math.abs(vy) < 0.2) {
+      endGesture();
+      return;
+    }
     var m = { vx: vx, vy: vy, last: now() };
     momentum = m;
     function step() {
@@ -178,6 +250,7 @@
       queueScroll(x, y, m.vx * dt, m.vy * dt);
       if (Math.abs(m.vx) < 0.03 && Math.abs(m.vy) < 0.03) {
         momentum = null;
+        endGesture();
         return;
       }
       raf(step);
@@ -199,6 +272,7 @@
     }
     var t = e.touches[0];
     var p = toPage(t.clientX, t.clientY);
+    beginGesture();
     touch = {
       sx: t.clientX, sy: t.clientY, lx: t.clientX, ly: t.clientY,
       px: p.x, py: p.y, start: now(), lt: now(), vx: 0, vy: 0, moved: false
@@ -229,11 +303,13 @@
     touch = null;
     if (!t) return;
     if (!t.moved) {
+      endGesture();
       if (now() - t.start < 800) send({ t: 'tap', x: t.px, y: t.py });
       return;
     }
     // A finger that rested before lifting should not fling.
     if (now() - t.lt < 100) startMomentum(t.px, t.py, t.vx, t.vy);
+    else endGesture();
   }, false);
 
   screenEl.addEventListener('touchcancel', function () { touch = null; }, false);
@@ -247,7 +323,9 @@
   screenEl.addEventListener('wheel', function (e) {
     e.preventDefault();
     var p = toPage(e.clientX, e.clientY);
+    beginGesture();
     queueScroll(p.x, p.y, e.deltaX, e.deltaY);
+    endGesture();
   }, false);
 
   // Stop iOS rubber-banding the whole app. Newer engines treat document touch listeners as passive

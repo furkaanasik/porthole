@@ -23,6 +23,7 @@ const STATIC = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
+  '/icon.png': ['icon.png', 'image/png'],
 };
 
 let context;
@@ -87,6 +88,8 @@ async function startStream() {
   cdp.on('Page.screencastFrame', (frame) => {
     const ack = () => cdp.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
     if (ws.readyState !== ws.OPEN) return ack();
+    // The scroll offset lets the client line up its own scroll prediction with this frame.
+    ws.send(JSON.stringify({ t: 'f', y: Math.round(frame.metadata.scrollOffsetY || 0) }));
     // Ack only once the frame has left the socket, so a slow link gets fewer frames instead of a backlog.
     ws.send(Buffer.from(frame.data, 'base64'), ack);
   });
@@ -98,7 +101,11 @@ async function startStream() {
   });
   // The screencast only emits on repaint; push one frame so a still page is not blank.
   const shot = await page.screenshot({ type: 'jpeg', quality: QUALITY }).catch(() => null);
-  if (shot && ws.readyState === ws.OPEN && token === streamToken) ws.send(shot);
+  const y = await page.evaluate(() => Math.round(window.scrollY)).catch(() => 0);
+  if (shot && ws.readyState === ws.OPEN && token === streamToken) {
+    ws.send(JSON.stringify({ t: 'f', y }));
+    ws.send(shot);
+  }
 }
 
 // --------------------------------------------------------------------- tabs
@@ -155,6 +162,14 @@ function enqueue(fn) {
   inputQueue = inputQueue.then(fn).catch((err) => log('input:', err.message));
 }
 
+// Wheel events need the mouse over the content, but a mouse left resting there fires hover
+// previews and menus. Once scrolling stops, move it outside the page.
+let parkTimer = null;
+function parkMouseSoon() {
+  clearTimeout(parkTimer);
+  parkTimer = setTimeout(() => enqueue(() => page.mouse.move(-1, -1)), 250);
+}
+
 let pendingScroll = null;
 function queueScroll(m) {
   if (pendingScroll) {
@@ -168,6 +183,7 @@ function queueScroll(m) {
     pendingScroll = null;
     await page.mouse.move(s.x, s.y);
     await page.mouse.wheel(s.dx, s.dy);
+    parkMouseSoon();
   });
 }
 
@@ -328,7 +344,8 @@ async function main() {
     // the headless shell and navigator.webdriver.
     channel: 'chromium',
     ignoreDefaultArgs: ['--enable-automation'],
-    args: ['--disable-blink-features=AutomationControlled'],
+    // Smooth scrolling animates every wheel step over ~150 ms, which the iPad sees as lag.
+    args: ['--disable-blink-features=AutomationControlled', '--disable-smooth-scrolling'],
     viewport,
     deviceScaleFactor: 1,
     locale: 'tr-TR',

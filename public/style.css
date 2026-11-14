@@ -108,7 +108,11 @@ html, body {
   background: #fff;
 }
 
-#frame {
+/* Two stacked frames: the next JPEG decodes in the hidden one, then they swap. */
+.frame {
+  position: absolute;
+  top: 0;
+  left: 0;
   display: block;
   width: 100%;
   pointer-events: none;
