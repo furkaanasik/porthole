@@ -51,8 +51,10 @@ function onData(data) {
 
 function addListener(ws) {
   listeners.add(ws);
+  console.log(new Date().toISOString(), 'audio listener connected');
   if (!ffmpeg) start();
   ws.on('close', () => {
+    console.log(new Date().toISOString(), 'audio listener disconnected');
     listeners.delete(ws);
     if (!listeners.size && ffmpeg) ffmpeg.kill();
   });
