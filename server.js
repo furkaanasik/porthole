@@ -17,9 +17,12 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 // Google shows a captcha to datacenter IPs, so search defaults to DuckDuckGo.
 const HOME_URL = process.env.HOME_URL || 'https://duckduckgo.com/';
 const SEARCH_URL = process.env.SEARCH_URL || 'https://duckduckgo.com/?q=';
+// Frames during motion are small and fast; once the screen settles, one sharp full-size frame follows.
 const QUALITY = Number(process.env.QUALITY) || 60;
+const SHARP_QUALITY = Number(process.env.SHARP_QUALITY) || 85;
+const STREAM_WIDTH = Number(process.env.STREAM_WIDTH) || 1280;
 const MAX_TABS = 5;
-const MAX_WIDTH = Number(process.env.MAX_WIDTH) || 1280;
+const MAX_WIDTH = Number(process.env.MAX_WIDTH) || 1920;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 // Fingerprint of the client files. The client reconnects on its own after a server restart and
@@ -109,11 +112,18 @@ async function startStream() {
     return;
   }
   client.cdp = cdp;
+  let lastData = null;
   cdp.on('Page.screencastFrame', (frame) => {
     const ack = () => cdp.send('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
     if (ws.readyState !== ws.OPEN) return ack();
+    // Repaints that change nothing would replace the sharp frame with a blurrier copy of it.
+    if (frame.data === lastData) return ack();
+    lastData = frame.data;
+    lastSharp = null; // the screen no longer shows the last sharp frame
     // The scroll offset lets the client line up its own scroll prediction with this frame.
-    ws.send(JSON.stringify({ t: 'f', y: Math.round(frame.metadata.scrollOffsetY || 0) }));
+    // w is the page width in CSS pixels; motion frames may be scaled down from it.
+    ws.send(JSON.stringify({ t: 'f', y: Math.round(frame.metadata.scrollOffsetY || 0), w: viewport.width }));
+    sharpSoon();
     // Ack only once the frame has left the socket, so a slow link gets fewer frames instead of a backlog.
     const jpeg = Buffer.from(frame.data, 'base64');
     frameStats.count++;
@@ -123,30 +133,36 @@ async function startStream() {
   await cdp.send('Page.startScreencast', {
     format: 'jpeg',
     quality: QUALITY,
-    maxWidth: viewport.width,
+    maxWidth: Math.min(viewport.width, STREAM_WIDTH),
     maxHeight: viewport.height,
   });
   // The screencast only emits on repaint; push one frame so a still page is not blank.
   if (token === streamToken) await sendSnapshot();
 }
 
+// Raw CDP rather than page.screenshot: Playwright injects a caret-hiding style for screenshots,
+// and that repaint set off new screencast frames and another snapshot, round and round.
+let lastSharp = null;
 async function sendSnapshot() {
-  if (!client || !page) return;
-  const ws = client.ws;
+  if (!client || !client.cdp || !page) return;
+  const { ws, cdp } = client;
   const y = await withTimeout(page.evaluate(() => Math.round(window.scrollY)), 500).catch(() => null);
-  const shot = await page.screenshot({ type: 'jpeg', quality: QUALITY, timeout: 3000 }).catch(() => null);
-  if (!shot || ws.readyState !== ws.OPEN) return;
-  ws.send(JSON.stringify({ t: 'f', y: y || 0 }));
+  const res = await withTimeout(cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: SHARP_QUALITY }), 3000).catch(() => null);
+  if (!res || ws.readyState !== ws.OPEN || res.data === lastSharp) return;
+  lastSharp = res.data;
+  const shot = Buffer.from(res.data, 'base64');
+  if (DEBUG) log(`sharp frame: ${Math.round(shot.length / 1024)} KB`);
+  ws.send(JSON.stringify({ t: 'f', y: y || 0, w: viewport.width }));
   ws.send(shot);
 }
 
-// The screencast skips repaints while a frame is unacknowledged and never sends them later, so
-// the final state after a scroll could stay off screen and taps landed on what had moved there.
-// Once input goes quiet, send one fresh frame.
-let refreshTimer = null;
-function refreshSoon() {
-  clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(() => sendSnapshot().catch(() => {}), 300);
+// Once the screen has been still for a moment (no input, no screencast frames), send one sharp
+// full-size frame. This also covers the screencast skipping repaints while a frame is unacked
+// and never sending them later, which left the screen behind the page after a scroll.
+let sharpTimer = null;
+function sharpSoon() {
+  clearTimeout(sharpTimer);
+  sharpTimer = setTimeout(() => sendSnapshot().catch(() => {}), 400);
 }
 
 // --------------------------------------------------------------------- tabs
@@ -262,7 +278,7 @@ function queueScroll(m) {
       }
     });
   parkMouseSoon();
-  refreshSoon();
+  sharpSoon();
 }
 
 // The client sends the scroll offset of the frame it shows. If the page has moved on since,
@@ -336,7 +352,7 @@ const handlers = {
       await page.mouse.click(m.x, m.y);
       // Give focus handlers a moment, without holding up the next input.
       setTimeout(() => reportFocus().catch(() => {}), 150);
-      refreshSoon();
+      sharpSoon();
     }, 'tap'),
   focus: () => reportFocus(),
   // The iPad sends the whole field value; replacing the selection keeps it in sync without tracking keystrokes.
@@ -349,7 +365,7 @@ const handlers = {
   key: (m) =>
     enqueue(async () => {
       await page.keyboard.press(m.key);
-      refreshSoon();
+      sharpSoon();
     }),
   video: async () => {
     const p = page;

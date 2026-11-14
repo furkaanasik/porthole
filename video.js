@@ -19,7 +19,7 @@ const FORMAT = [
   'b',
 ].join('/');
 
-let current = null; // { id, dir, ffmpeg }
+let current = null; // { id, dir, ffmpeg, live }
 let startToken = 0;
 
 fs.rmSync(VIDEO_DIR, { recursive: true, force: true });
@@ -142,7 +142,7 @@ async function start(pageUrl, { cookies, userAgent }) {
     let errors = '';
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
     proc.stderr.on('data', (d) => (errors = (errors + d).slice(-4000)));
-    current = { id, dir, ffmpeg: proc };
+    current = { id, dir, ffmpeg: proc, live };
     await waitForPlaylist(dir, proc, () => errors);
     return { src: `/video/${id}/index.m3u8`, title: info.title || '', live, transcoding };
   } catch (err) {
@@ -165,18 +165,29 @@ function serve(id, file, res) {
     return res.end();
   }
   const full = path.join(current.dir, file);
+  if (file.endsWith('.m3u8')) return servePlaylist(full, current.live, res);
   fs.stat(full, (err, st) => {
     if (err) {
       res.writeHead(404);
       return res.end();
     }
-    const playlist = file.endsWith('.m3u8');
-    res.writeHead(200, {
-      'Content-Type': playlist ? 'application/vnd.apple.mpegurl' : 'video/mp2t',
-      'Content-Length': st.size,
-      'Cache-Control': playlist ? 'no-cache' : 'private, max-age=3600',
-    });
+    res.writeHead(200, { 'Content-Type': 'video/mp2t', 'Content-Length': st.size, 'Cache-Control': 'private, max-age=3600' });
     fs.createReadStream(full).pipe(res);
+  });
+}
+
+// While ffmpeg is still repackaging, the playlist has no end tag, and players treat it as live:
+// they start at its newest segment and stall whenever the download lags. EXT-X-START makes them
+// start at the beginning and build up a buffer instead.
+function servePlaylist(full, live, res) {
+  fs.readFile(full, 'utf8', (err, text) => {
+    if (err) {
+      res.writeHead(404);
+      return res.end();
+    }
+    if (!live) text = text.replace('#EXTM3U\n', '#EXTM3U\n#EXT-X-START:TIME-OFFSET=0\n');
+    res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache' });
+    res.end(text);
   });
 }
 

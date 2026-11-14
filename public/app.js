@@ -52,7 +52,7 @@
     };
     ws.onmessage = function (e) {
       if (typeof e.data === 'string') handle(JSON.parse(e.data));
-      else showFrame(e.data, frameMetaY);
+      else showFrame(e.data, frameMetaY, frameMetaW);
     };
     ws.onclose = function (e) {
       ws = null;
@@ -82,6 +82,7 @@
   function handle(m) {
     if (m.t === 'f') {
       frameMetaY = m.y;
+      frameMetaW = m.w || 0;
     } else if (m.t === 'hello') {
       // After a server update, reconnecting is not enough: old code here would mis-map taps.
       if (clientVersion && clientVersion !== m.version) location.reload();
@@ -108,11 +109,13 @@
   var next = null; // { blob, y }
   var shownUrl = null;
   var frameMetaY = 0; // scroll offset the server announced for the next binary frame
+  var frameMetaW = 0; // page width in CSS pixels for that frame; motion frames come scaled down
+  var framePageW = 0; // page width of the frame on screen
   var frameScrollY = 0; // scroll offset of the frame on screen
 
-  function showFrame(blob, y) {
+  function showFrame(blob, y, w) {
     if (decoding) {
-      next = { blob: blob, y: y };
+      next = { blob: blob, y: y, w: w };
       return;
     }
     decoding = true;
@@ -122,6 +125,7 @@
       var shown = back;
       back = front;
       front = shown;
+      framePageW = w;
       onFrameShown(y);
       front.style.visibility = 'visible';
       back.style.visibility = 'hidden';
@@ -131,7 +135,7 @@
       if (next) {
         var n = next;
         next = null;
-        showFrame(n.blob, n.y);
+        showFrame(n.blob, n.y, n.w);
       }
     };
     back.src = url;
@@ -205,10 +209,11 @@
   window.addEventListener('resize', onResize, false);
   window.addEventListener('orientationchange', onResize, false);
 
-  // Page pixels per screen pixel. The server caps the remote width, so a wide desktop window
-  // shows an upscaled frame; on the iPad this is 1.
+  // Page pixels per screen pixel, from the page width the server reports with each frame (frames
+  // during motion are scaled down, so the image size alone would be wrong). On the iPad this is 1.
   function pageScale() {
-    return front.naturalWidth ? front.naturalWidth / screenEl.clientWidth : 1;
+    var w = framePageW || front.naturalWidth;
+    return w ? w / screenEl.clientWidth : 1;
   }
 
   function toPage(clientX, clientY) {
@@ -579,7 +584,9 @@
         toast('Bu tarayıcı videoyu oynatamıyor.');
         return;
       }
-      hls = new window.Hls();
+      // The playlist grows while the server is still repackaging, so hls.js would treat it as live
+      // and play right at its edge, stalling whenever the download lags. Start from the beginning.
+      hls = new window.Hls({ startPosition: 0 });
       hls.loadSource(src);
       hls.attachMedia(playerVideo);
       playerVideo.play();
