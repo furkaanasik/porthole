@@ -20,6 +20,14 @@ const MAX_TABS = 5;
 const MAX_WIDTH = Number(process.env.MAX_WIDTH) || 1280;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
+// Fingerprint of the client files. The client reconnects on its own after a server restart and
+// would keep running old code; when this changes, it reloads.
+const CLIENT_VERSION = require('crypto')
+  .createHash('sha1')
+  .update(['index.html', 'app.js', 'style.css'].map((f) => fs.readFileSync(path.join(PUBLIC_DIR, f))).join('\n'))
+  .digest('hex')
+  .slice(0, 12);
+
 const STATIC = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
@@ -309,6 +317,17 @@ const handlers = {
   tap: (m) =>
     enqueue(async () => {
       await alignScroll(m.sy);
+      if (DEBUG) {
+        const hit = await withTimeout(
+          page.evaluate(([x, y]) => {
+            const el = document.elementFromPoint(x, y);
+            const a = el && el.closest('a');
+            return { scrollY: Math.round(window.scrollY), target: a ? a.href : el && el.tagName };
+          }, [m.x, m.y]),
+          300,
+        ).catch(() => null);
+        log('tap', JSON.stringify(m), JSON.stringify(hit));
+      }
       await page.mouse.click(m.x, m.y);
       // Give focus handlers a moment, without holding up the next input.
       setTimeout(() => reportFocus().catch(() => {}), 150);
@@ -420,6 +439,7 @@ function onConnection(ws) {
     client = null;
     log('client disconnected');
   });
+  send({ t: 'hello', version: CLIENT_VERSION });
   sendState(false);
   // The client sends its size right away; that message starts the stream.
 }

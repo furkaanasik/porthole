@@ -77,9 +77,15 @@
     else location.reload();
   }, false);
 
+  var clientVersion = null;
+
   function handle(m) {
     if (m.t === 'f') {
       frameMetaY = m.y;
+    } else if (m.t === 'hello') {
+      // After a server update, reconnecting is not enough: old code here would mis-map taps.
+      if (clientVersion && clientVersion !== m.version) location.reload();
+      clientVersion = m.version;
     } else if (m.t === 'state') {
       if (!editingAddress && m.url) address.value = m.url;
       if (m.title) document.title = m.title;
