@@ -194,6 +194,13 @@ html, body {
   display: inline;
 }
 
+#hd span {
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+}
+
+#hd.on,
 #sound.on,
 #video.busy {
   color: #4c9eff;

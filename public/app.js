@@ -49,6 +49,7 @@
       retries = 0;
       showStatus(null);
       sendSize(true);
+      sendHd();
     };
     ws.onmessage = function (e) {
       if (typeof e.data === 'string') handle(JSON.parse(e.data));
@@ -443,6 +444,26 @@
   onClick('typeClose', function () {
     flushType();
     closeTypebar();
+  });
+
+  // -------------------------------------------------------------------- hd
+
+  // HD keeps full size and quality while scrolling too, at the cost of bigger frames and a few
+  // frames per second less. Remembered per device.
+  var hdBtn = $('hd');
+  var hdOn = false;
+  try { hdOn = localStorage.getItem('pencere.hd') === '1'; } catch (e) {}
+
+  function sendHd() {
+    hdBtn.className = hdOn ? 'btn on' : 'btn';
+    send({ t: 'hd', on: hdOn });
+  }
+
+  onClick('hd', function () {
+    hdOn = !hdOn;
+    try { localStorage.setItem('pencere.hd', hdOn ? '1' : '0'); } catch (e) {}
+    sendHd();
+    toast(hdOn ? 'HD açık: kaydırırken de tam kalite.' : 'HD kapalı: kaydırırken akıcılık öncelikli.');
   });
 
   // ----------------------------------------------------------------- sound

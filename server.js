@@ -48,6 +48,7 @@ let context;
 let page; // the tab currently shown on the iPad
 let viewport = { width: 1024, height: 690 };
 let mode = 'idle'; // 'fast' while the user is interacting
+let hd = false; // the client asked for full quality even while scrolling
 let client = null; // { ws, cdp }
 let streamToken = 0;
 let userAgent;
@@ -139,7 +140,7 @@ async function startStream() {
 }
 
 function screencastParams() {
-  const fast = mode === 'fast';
+  const fast = mode === 'fast' && !hd;
   return {
     format: 'jpeg',
     quality: fast ? QUALITY : IDLE_QUALITY,
@@ -161,6 +162,10 @@ function inputActivity() {
 function setMode(next) {
   if (mode === next) return;
   mode = next;
+  if (!hd) restartScreencast();
+}
+
+function restartScreencast() {
   const cdp = client && client.cdp;
   if (!cdp) return;
   cdp
@@ -421,6 +426,11 @@ const handlers = {
     }
   },
   videoStop: () => video.stop(),
+  hd: (m) => {
+    if (hd === !!m.on) return;
+    hd = !!m.on;
+    restartScreencast();
+  },
   // Very wide windows get a capped viewport with the same aspect ratio, shown upscaled:
   // every pixel costs CPU on this 2-core server.
   resize: async (m) => {
@@ -514,6 +524,7 @@ function onConnection(ws) {
     old.ws.close(4000, 'replaced');
   }
   const me = { ws, cdp: null };
+  hd = false; // the new client says what it wants right after connecting
   client = me;
   log('client connected');
   ws.on('message', (data, isBinary) => {
