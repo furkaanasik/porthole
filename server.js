@@ -404,14 +404,16 @@ const handlers = {
       await page.keyboard.press(m.key);
       sharpSoon();
     }),
-  video: async () => {
+  video: async (m) => {
     const p = page;
+    // Safari plays HLS natively (the iPad 2, with its tighter limits); others go through hls.js.
+    const device = m.native ? 'ipad' : 'desktop';
     send({ t: 'toast', text: 'Video hazırlanıyor…' });
     try {
-      const v = await video.start(p.url(), { cookies: await context.cookies(), userAgent });
+      const v = await video.start(p.url(), { cookies: await context.cookies(), userAgent, device });
       // The iPad plays it now; the page's own copy would only burn CPU.
       await withTimeout(p.evaluate(() => document.querySelectorAll('video, audio').forEach((el) => el.pause())), 1000).catch(() => {});
-      log(`video: ${v.title} (${v.transcoding ? 'transcoding' : 'copy'}${v.live ? ', live' : ''})`);
+      log(`video: ${v.title} (${device}, ${v.quality}, ${v.transcoding ? 'transcoding' : 'copy'}${v.live ? ', live' : ''})`);
       send({ t: 'video', ...v });
     } catch (err) {
       log('video:', err.message);

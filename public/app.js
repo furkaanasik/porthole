@@ -557,7 +557,7 @@
     if (videoWaiting) return;
     videoWaiting = true;
     videoBtn.className = 'btn busy';
-    send({ t: 'video' });
+    send({ t: 'video', native: !!playerVideo.canPlayType('application/vnd.apple.mpegurl') });
   });
 
   function onVideo(m) {
