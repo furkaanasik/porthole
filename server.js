@@ -17,9 +17,11 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 // Google shows a captcha to datacenter IPs, so search defaults to DuckDuckGo.
 const HOME_URL = process.env.HOME_URL || 'https://duckduckgo.com/';
 const SEARCH_URL = process.env.SEARCH_URL || 'https://duckduckgo.com/?q=';
-// Frames during motion are small and fast; once the screen settles, one sharp full-size frame follows.
+// While the user scrolls, taps or types, frames are small and fast (QUALITY, at most STREAM_WIDTH
+// wide). Otherwise the stream runs at full size and IDLE_QUALITY, and once the screen is still,
+// one lossless PNG frame follows.
 const QUALITY = Number(process.env.QUALITY) || 60;
-const SHARP_QUALITY = Number(process.env.SHARP_QUALITY) || 85;
+const IDLE_QUALITY = Number(process.env.IDLE_QUALITY) || 85;
 const STREAM_WIDTH = Number(process.env.STREAM_WIDTH) || 1280;
 const MAX_TABS = 5;
 const MAX_WIDTH = Number(process.env.MAX_WIDTH) || 1920;
@@ -45,6 +47,7 @@ const STATIC = {
 let context;
 let page; // the tab currently shown on the iPad
 let viewport = { width: 1024, height: 690 };
+let mode = 'idle'; // 'fast' while the user is interacting
 let client = null; // { ws, cdp }
 let streamToken = 0;
 let userAgent;
@@ -130,14 +133,40 @@ async function startStream() {
     frameStats.bytes += jpeg.length;
     ws.send(jpeg, ack);
   });
-  await cdp.send('Page.startScreencast', {
-    format: 'jpeg',
-    quality: QUALITY,
-    maxWidth: Math.min(viewport.width, STREAM_WIDTH),
-    maxHeight: viewport.height,
-  });
+  await cdp.send('Page.startScreencast', screencastParams());
   // The screencast only emits on repaint; push one frame so a still page is not blank.
   if (token === streamToken) await sendSnapshot();
+}
+
+function screencastParams() {
+  const fast = mode === 'fast';
+  return {
+    format: 'jpeg',
+    quality: fast ? QUALITY : IDLE_QUALITY,
+    maxWidth: fast ? Math.min(viewport.width, STREAM_WIDTH) : viewport.width,
+    maxHeight: viewport.height,
+  };
+}
+
+// Input switches the stream to fast mode; 350 ms after the last input it goes back to full quality.
+// Page animations alone never cost sharpness this way.
+let modeTimer = null;
+function inputActivity() {
+  inputSinceSharp = true;
+  clearTimeout(modeTimer);
+  modeTimer = setTimeout(() => setMode('idle'), 350);
+  setMode('fast');
+}
+
+function setMode(next) {
+  if (mode === next) return;
+  mode = next;
+  const cdp = client && client.cdp;
+  if (!cdp) return;
+  cdp
+    .send('Page.stopScreencast')
+    .then(() => cdp.send('Page.startScreencast', screencastParams()))
+    .catch(() => {});
 }
 
 // Raw CDP rather than page.screenshot: Playwright injects a caret-hiding style for screenshots,
@@ -147,9 +176,12 @@ async function sendSnapshot() {
   if (!client || !client.cdp || !page) return;
   const { ws, cdp } = client;
   const y = await withTimeout(page.evaluate(() => Math.round(window.scrollY)), 500).catch(() => null);
-  const res = await withTimeout(cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: SHARP_QUALITY }), 3000).catch(() => null);
+  // PNG is lossless, so text comes out exactly as Chromium drew it.
+  const res = await withTimeout(cdp.send('Page.captureScreenshot', { format: 'png' }), 3000).catch(() => null);
   if (!res || ws.readyState !== ws.OPEN || res.data === lastSharp) return;
   lastSharp = res.data;
+  lastSharpAt = Date.now();
+  inputSinceSharp = false;
   const shot = Buffer.from(res.data, 'base64');
   if (DEBUG) log(`sharp frame: ${Math.round(shot.length / 1024)} KB`);
   ws.send(JSON.stringify({ t: 'f', y: y || 0, w: viewport.width }));
@@ -159,10 +191,15 @@ async function sendSnapshot() {
 // Once the screen has been still for a moment (no input, no screencast frames), send one sharp
 // full-size frame. This also covers the screencast skipping repaints while a frame is unacked
 // and never sending them later, which left the screen behind the page after a scroll.
+// After input it comes right away; for the page's own animations (a blinking caret, a pulsing
+// badge) at most every 2 s, since a PNG can be a few hundred KB.
 let sharpTimer = null;
+let lastSharpAt = 0;
+let inputSinceSharp = true;
 function sharpSoon() {
   clearTimeout(sharpTimer);
-  sharpTimer = setTimeout(() => sendSnapshot().catch(() => {}), 400);
+  const wait = inputSinceSharp ? 400 : Math.max(400, lastSharpAt + 2000 - Date.now());
+  sharpTimer = setTimeout(() => sendSnapshot().catch(() => {}), wait);
 }
 
 // --------------------------------------------------------------------- tabs
@@ -382,7 +419,7 @@ const handlers = {
     }
   },
   videoStop: () => video.stop(),
-  // Wide desktop windows get a capped viewport with the same aspect ratio, shown upscaled:
+  // Very wide windows get a capped viewport with the same aspect ratio, shown upscaled:
   // every pixel costs CPU on this 2-core server.
   resize: async (m) => {
     let w = Math.round(m.w) || 0;
@@ -394,6 +431,8 @@ const handlers = {
     const width = Math.max(320, w);
     const height = Math.max(240, Math.min(1920, h));
     if (width === viewport.width && height === viewport.height && client.cdp) return;
+    // Pixel density is not applied (Playwright fixes it per context); logged to see who would need it.
+    log(`viewport ${width}x${height}, screen dpr ${m.dpr}`);
     viewport = { width, height };
     await page.setViewportSize(viewport);
     await startStream();
@@ -401,6 +440,7 @@ const handlers = {
 };
 
 const NAV_TYPES = ['nav', 'back', 'forward', 'reload', 'home'];
+const INPUT_TYPES = NAV_TYPES.concat(['scroll', 'tap', 'type', 'key']);
 
 function onMessage(raw) {
   let m;
@@ -412,6 +452,7 @@ function onMessage(raw) {
   const handler = handlers[m && m.t];
   if (!handler || !page) return;
   if (process.env.DEBUG && m.t !== 'scroll') log('msg', m.t === 'type' ? { t: 'type', len: m.value.length } : m);
+  if (INPUT_TYPES.includes(m.t)) inputActivity();
   if (NAV_TYPES.includes(m.t)) send({ t: 'state', url: page.url(), loading: true });
   Promise.resolve(handler(m)).catch((err) => log(m.t + ':', err.message));
 }

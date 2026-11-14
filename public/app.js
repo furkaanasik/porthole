@@ -202,7 +202,8 @@
     if (!force && w === viewW && h === viewH) return;
     viewW = w;
     viewH = h;
-    send({ t: 'resize', w: w, h: h });
+    // dpr is only logged on the server for now.
+    send({ t: 'resize', w: w, h: h, dpr: window.devicePixelRatio || 1 });
   }
 
   var onResize = debounce(function () { sendSize(false); }, 300);

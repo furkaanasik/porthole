@@ -17,7 +17,7 @@ services:
       - HOME_URL=${HOME_URL:-https://duckduckgo.com/}
       - SEARCH_URL=${SEARCH_URL:-https://duckduckgo.com/?q=}
       - QUALITY=${QUALITY:-60}
-      - SHARP_QUALITY=${SHARP_QUALITY:-85}
+      - IDLE_QUALITY=${IDLE_QUALITY:-85}
       - DEBUG=${DEBUG:-}
     shm_size: 512m
     mem_limit: 1500m
