@@ -9,6 +9,10 @@ services:
       - "127.0.0.1:8090:8091" # browser.furkanasikdev.com routes to localhost:8090
     volumes:
       - ./data:/data # browser profile: cookies and logins survive restarts
+      # Ad and tracker domains resolve to 0.0.0.0, so ad scripts never load and eat the 2 CPUs.
+      # Fetch it before the first start (and to refresh it):
+      #   curl -fsSL https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts -o blocklist.hosts
+      - ./blocklist.hosts:/etc/hosts:ro
     environment:
       - HOME_URL=${HOME_URL:-https://duckduckgo.com/}
       - SEARCH_URL=${SEARCH_URL:-https://duckduckgo.com/?q=}

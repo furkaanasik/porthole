@@ -17,6 +17,7 @@ const HOME_URL = process.env.HOME_URL || 'https://duckduckgo.com/';
 const SEARCH_URL = process.env.SEARCH_URL || 'https://duckduckgo.com/?q=';
 const QUALITY = Number(process.env.QUALITY) || 60;
 const MAX_TABS = 5;
+const MAX_WIDTH = Number(process.env.MAX_WIDTH) || 1280;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const STATIC = {
@@ -66,6 +67,16 @@ async function sendState(loading) {
 
 // ---------------------------------------------------------------- streaming
 
+const frameStats = { count: 0, bytes: 0 };
+if (process.env.DEBUG) {
+  setInterval(() => {
+    if (!frameStats.count) return;
+    const kb = Math.round(frameStats.bytes / frameStats.count / 1024);
+    log(`frames: ${(frameStats.count / 5).toFixed(1)}/s, avg ${kb} KB, ${viewport.width}x${viewport.height}`);
+    frameStats.count = frameStats.bytes = 0;
+  }, 5000);
+}
+
 async function stopStream() {
   if (!client || !client.cdp) return;
   const cdp = client.cdp;
@@ -91,7 +102,10 @@ async function startStream() {
     // The scroll offset lets the client line up its own scroll prediction with this frame.
     ws.send(JSON.stringify({ t: 'f', y: Math.round(frame.metadata.scrollOffsetY || 0) }));
     // Ack only once the frame has left the socket, so a slow link gets fewer frames instead of a backlog.
-    ws.send(Buffer.from(frame.data, 'base64'), ack);
+    const jpeg = Buffer.from(frame.data, 'base64');
+    frameStats.count++;
+    frameStats.bytes += jpeg.length;
+    ws.send(jpeg, ack);
   });
   await cdp.send('Page.startScreencast', {
     format: 'jpeg',
@@ -157,34 +171,70 @@ function onNewPage(p) {
 
 // -------------------------------------------------------------------- input
 
+const DEBUG = !!process.env.DEBUG;
+
 let inputQueue = Promise.resolve();
-function enqueue(fn) {
-  inputQueue = inputQueue.then(fn).catch((err) => log('input:', err.message));
+function enqueue(fn, label) {
+  const queuedAt = Date.now();
+  inputQueue = inputQueue
+    .then(async () => {
+      const startedAt = Date.now();
+      await fn();
+      if (DEBUG && label) log(`input ${label}: waited ${startedAt - queuedAt} ms, ran ${Date.now() - startedAt} ms`);
+    })
+    .catch((err) => log('input:', err.message));
 }
 
-// Wheel events need the mouse over the content, but a mouse left resting there fires hover
-// previews and menus. Once scrolling stops, move it outside the page.
+const withTimeout = (promise, ms) => Promise.race([promise, new Promise((r) => setTimeout(() => r(null), ms))]);
+
+// Scrolling bypasses the input queue. Playwright's mouse waits for the page to handle each event,
+// and a page busy with ads takes 200-700 ms per wheel, which stalled taps behind it. Raw CDP wheel
+// events go out at once; at most two are in flight and the rest merge into one.
+const inputSessions = new WeakMap();
+function inputSession(p) {
+  if (!inputSessions.has(p)) inputSessions.set(p, context.newCDPSession(p));
+  return inputSessions.get(p);
+}
+
+function rawMouse(params) {
+  const p = page;
+  return inputSession(p).then((s) => s.send('Input.dispatchMouseEvent', params));
+}
+
+// A mouse left resting over the content fires hover previews and menus, so move it off the page
+// once scrolling stops.
 let parkTimer = null;
 function parkMouseSoon() {
   clearTimeout(parkTimer);
-  parkTimer = setTimeout(() => enqueue(() => page.mouse.move(-1, -1)), 250);
+  parkTimer = setTimeout(() => rawMouse({ type: 'mouseMoved', x: -1, y: -1 }).catch(() => {}), 250);
 }
 
-let pendingScroll = null;
+let wheelsInFlight = 0;
+let pendingWheel = null;
 function queueScroll(m) {
-  if (pendingScroll) {
-    pendingScroll.dx += m.dx;
-    pendingScroll.dy += m.dy;
+  if (wheelsInFlight >= 2) {
+    if (pendingWheel) {
+      pendingWheel.dx += m.dx;
+      pendingWheel.dy += m.dy;
+    } else {
+      pendingWheel = { x: m.x, y: m.y, dx: m.dx, dy: m.dy };
+    }
     return;
   }
-  pendingScroll = { x: m.x, y: m.y, dx: m.dx, dy: m.dy };
-  enqueue(async () => {
-    const s = pendingScroll;
-    pendingScroll = null;
-    await page.mouse.move(s.x, s.y);
-    await page.mouse.wheel(s.dx, s.dy);
-    parkMouseSoon();
-  });
+  wheelsInFlight++;
+  const sentAt = Date.now();
+  rawMouse({ type: 'mouseWheel', x: m.x, y: m.y, deltaX: m.dx, deltaY: m.dy })
+    .catch(() => {})
+    .finally(() => {
+      if (DEBUG) log(`wheel acked after ${Date.now() - sentAt} ms`);
+      wheelsInFlight--;
+      if (pendingWheel) {
+        const next = pendingWheel;
+        pendingWheel = null;
+        queueScroll(next);
+      }
+    });
+  parkMouseSoon();
 }
 
 // Runs inside each frame; reports the focused text field, if any.
@@ -206,12 +256,22 @@ function focusedField() {
   };
 }
 
+// Runs outside the input queue with timeouts: ad iframes that are still loading can take
+// seconds to answer, and taps must not wait for them.
 async function reportFocus() {
-  for (const frame of page.frames()) {
-    const field = await frame.evaluate(focusedField).catch(() => null);
-    if (field) return send({ t: 'focus', field });
+  const p = page;
+  const probe = (frame) => withTimeout(frame.evaluate(focusedField), 400).catch(() => null);
+  let field = await probe(p.mainFrame());
+  if (!field) {
+    const inFrame = await withTimeout(p.evaluate(() => document.activeElement?.tagName === 'IFRAME'), 400).catch(() => false);
+    if (inFrame) {
+      for (const frame of p.frames().slice(1)) {
+        field = await probe(frame);
+        if (field) break;
+      }
+    }
   }
-  send({ t: 'focus', field: null });
+  if (p === page) send({ t: 'focus', field: field || null });
 }
 
 const handlers = {
@@ -224,10 +284,10 @@ const handlers = {
   tap: (m) =>
     enqueue(async () => {
       await page.mouse.click(m.x, m.y);
-      await new Promise((r) => setTimeout(r, 150));
-      await reportFocus();
-    }),
-  focus: () => enqueue(reportFocus),
+      // Give focus handlers a moment, without holding up the next input.
+      setTimeout(() => reportFocus().catch(() => {}), 150);
+    }, 'tap'),
+  focus: () => reportFocus(),
   // The iPad sends the whole field value; replacing the selection keeps it in sync without tracking keystrokes.
   type: (m) =>
     enqueue(async () => {
@@ -236,9 +296,17 @@ const handlers = {
       else await page.keyboard.press('Backspace');
     }),
   key: (m) => enqueue(() => page.keyboard.press(m.key)),
+  // Wide desktop windows get a capped viewport with the same aspect ratio, shown upscaled:
+  // every pixel costs CPU on this 2-core server.
   resize: async (m) => {
-    const width = Math.max(320, Math.min(1920, Math.round(m.w) || 0));
-    const height = Math.max(240, Math.min(1920, Math.round(m.h) || 0));
+    let w = Math.round(m.w) || 0;
+    let h = Math.round(m.h) || 0;
+    if (w > MAX_WIDTH) {
+      h = Math.round((h * MAX_WIDTH) / w);
+      w = MAX_WIDTH;
+    }
+    const width = Math.max(320, w);
+    const height = Math.max(240, Math.min(1920, h));
     if (width === viewport.width && height === viewport.height && client.cdp) return;
     viewport = { width, height };
     await page.setViewportSize(viewport);
@@ -338,7 +406,13 @@ setInterval(() => {
 }, 25000);
 
 async function main() {
-  context = await chromium.launchPersistentContext(path.join(DATA_DIR, 'profile'), {
+  const profileDir = path.join(DATA_DIR, 'profile');
+  // A recreated container has a new hostname, and Chromium refuses a profile whose lock names
+  // another host. This process is the profile's only user, so a leftover lock is always stale.
+  for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    fs.rmSync(path.join(profileDir, name), { force: true });
+  }
+  context = await chromium.launchPersistentContext(profileDir, {
     headless: true,
     // Full Chromium in new headless mode, without the automation flag: search engines block
     // the headless shell and navigator.webdriver.

@@ -176,7 +176,7 @@
   }
 
   function renderOffset() {
-    var off = predictY === null || !gesture || gesture.off ? 0 : predictY - frameScrollY;
+    var off = predictY === null || !gesture || gesture.off ? 0 : (predictY - frameScrollY) / pageScale();
     var max = screenEl.clientHeight * 0.4;
     off = Math.round(Math.max(-max, Math.min(max, off)));
     var t = off ? 'translate3d(0,' + -off + 'px,0)' : '';
@@ -197,9 +197,15 @@
   window.addEventListener('resize', onResize, false);
   window.addEventListener('orientationchange', onResize, false);
 
+  // Page pixels per screen pixel. The server caps the remote width, so a wide desktop window
+  // shows an upscaled frame; on the iPad this is 1.
+  function pageScale() {
+    return front.naturalWidth ? front.naturalWidth / screenEl.clientWidth : 1;
+  }
+
   function toPage(clientX, clientY) {
     var rect = screenEl.getBoundingClientRect();
-    var scale = viewW ? viewW / rect.width : 1;
+    var scale = pageScale();
     return {
       x: Math.round((clientX - rect.left) * scale),
       y: Math.round((clientY - rect.top) * scale)
@@ -213,11 +219,13 @@
   var scrollAt = null;
   var flushTimer = null;
 
+  // dx/dy are screen pixels; the page moves by the same visual distance as the finger.
   function queueScroll(x, y, dx, dy) {
-    scrollDX += dx;
-    scrollDY += dy;
+    var scale = pageScale();
+    scrollDX += dx * scale;
+    scrollDY += dy * scale;
     scrollAt = { x: x, y: y };
-    predict(dy);
+    predict(dy * scale);
     if (!flushTimer) flushTimer = setTimeout(flushScroll, 33);
   }
 
