@@ -312,7 +312,7 @@
     if (!t) return;
     if (!t.moved) {
       endGesture();
-      if (now() - t.start < 800) send({ t: 'tap', x: t.px, y: t.py });
+      if (now() - t.start < 800) sendTap(t.px, t.py);
       return;
     }
     // A finger that rested before lifting should not fling.
@@ -322,10 +322,16 @@
 
   screenEl.addEventListener('touchcancel', function () { touch = null; }, false);
 
+  // sy tells the server which scroll position the tapped frame showed, so it can line the page
+  // up with what the user saw before clicking.
+  function sendTap(x, y) {
+    send({ t: 'tap', x: x, y: y, sy: frameScrollY });
+  }
+
   // Mouse and wheel, for testing from a desktop browser.
   screenEl.addEventListener('click', function (e) {
     var p = toPage(e.clientX, e.clientY);
-    send({ t: 'tap', x: p.x, y: p.y });
+    sendTap(p.x, p.y);
   }, false);
 
   screenEl.addEventListener('wheel', function (e) {

@@ -114,12 +114,26 @@ async function startStream() {
     maxHeight: viewport.height,
   });
   // The screencast only emits on repaint; push one frame so a still page is not blank.
-  const shot = await page.screenshot({ type: 'jpeg', quality: QUALITY }).catch(() => null);
-  const y = await page.evaluate(() => Math.round(window.scrollY)).catch(() => 0);
-  if (shot && ws.readyState === ws.OPEN && token === streamToken) {
-    ws.send(JSON.stringify({ t: 'f', y }));
-    ws.send(shot);
-  }
+  if (token === streamToken) await sendSnapshot();
+}
+
+async function sendSnapshot() {
+  if (!client || !page) return;
+  const ws = client.ws;
+  const y = await withTimeout(page.evaluate(() => Math.round(window.scrollY)), 500).catch(() => null);
+  const shot = await page.screenshot({ type: 'jpeg', quality: QUALITY, timeout: 3000 }).catch(() => null);
+  if (!shot || ws.readyState !== ws.OPEN) return;
+  ws.send(JSON.stringify({ t: 'f', y: y || 0 }));
+  ws.send(shot);
+}
+
+// The screencast skips repaints while a frame is unacknowledged and never sends them later, so
+// the final state after a scroll could stay off screen and taps landed on what had moved there.
+// Once input goes quiet, send one fresh frame.
+let refreshTimer = null;
+function refreshSoon() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => sendSnapshot().catch(() => {}), 300);
 }
 
 // --------------------------------------------------------------------- tabs
@@ -235,6 +249,17 @@ function queueScroll(m) {
       }
     });
   parkMouseSoon();
+  refreshSoon();
+}
+
+// The client sends the scroll offset of the frame it shows. If the page has moved on since,
+// scroll it back first, so the tap hits what the user saw.
+async function alignScroll(sy) {
+  if (typeof sy !== 'number') return;
+  const current = await withTimeout(page.evaluate(() => Math.round(window.scrollY)), 300).catch(() => null);
+  if (current === null || Math.abs(current - sy) <= 2) return;
+  if (DEBUG) log(`tap: page at ${current}, frame at ${sy}; realigning`);
+  await withTimeout(page.evaluate((y) => window.scrollTo(window.scrollX, y), sy), 300).catch(() => {});
 }
 
 // Runs inside each frame; reports the focused text field, if any.
@@ -283,9 +308,11 @@ const handlers = {
   scroll: (m) => queueScroll(m),
   tap: (m) =>
     enqueue(async () => {
+      await alignScroll(m.sy);
       await page.mouse.click(m.x, m.y);
       // Give focus handlers a moment, without holding up the next input.
       setTimeout(() => reportFocus().catch(() => {}), 150);
+      refreshSoon();
     }, 'tap'),
   focus: () => reportFocus(),
   // The iPad sends the whole field value; replacing the selection keeps it in sync without tracking keystrokes.
@@ -295,7 +322,11 @@ const handlers = {
       if (m.value) await page.keyboard.insertText(m.value);
       else await page.keyboard.press('Backspace');
     }),
-  key: (m) => enqueue(() => page.keyboard.press(m.key)),
+  key: (m) =>
+    enqueue(async () => {
+      await page.keyboard.press(m.key);
+      refreshSoon();
+    }),
   // Wide desktop windows get a capped viewport with the same aspect ratio, shown upscaled:
   // every pixel costs CPU on this 2-core server.
   resize: async (m) => {
