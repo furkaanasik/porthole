@@ -1,0 +1,20 @@
+services:
+  pencere:
+    build: .
+    image: pencere:local
+    container_name: pencere
+    restart: unless-stopped
+    init: true # reaps Chromium's child processes
+    ports:
+      - "127.0.0.1:8091:8091"
+    volumes:
+      - ./data:/data # browser profile: cookies and logins survive restarts
+    environment:
+      - HOME_URL=${HOME_URL:-https://duckduckgo.com/}
+      - SEARCH_URL=${SEARCH_URL:-https://duckduckgo.com/?q=}
+      - QUALITY=${QUALITY:-60}
+      - DEBUG=${DEBUG:-}
+    shm_size: 512m
+    mem_limit: 1500m
+    security_opt:
+      - no-new-privileges:true

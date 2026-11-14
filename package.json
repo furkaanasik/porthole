@@ -1,0 +1,15 @@
+{
+  "name": "pencere",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Remote Chromium for old iPads: the server renders, the iPad shows frames and sends touches.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check:client": "npx --yes acorn@8.14.0 --ecma5 --silent public/app.js"
+  },
+  "dependencies": {
+    "playwright": "1.65.1",
+    "ws": "8.23.0"
+  }
+}

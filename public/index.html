@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="format-detection" content="telephone=no">
+<title>Pencere</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="toolbar">
+  <button id="back" class="btn" type="button" aria-label="Geri"><svg viewBox="0 0 24 24"><path d="M15 4L7 12L15 20"/></svg></button>
+  <button id="forward" class="btn" type="button" aria-label="İleri"><svg viewBox="0 0 24 24"><path d="M9 4L17 12L9 20"/></svg></button>
+  <button id="reload" class="btn" type="button" aria-label="Yenile"><svg viewBox="0 0 24 24"><path d="M20 12A8 8 0 1 1 17.7 6.3M20 3V8H15"/></svg></button>
+  <button id="home" class="btn" type="button" aria-label="Ana sayfa"><svg viewBox="0 0 24 24"><path d="M3 11L12 3L21 11M6 9V20H18V9"/></svg></button>
+  <form id="addressForm" novalidate>
+    <input id="address" type="url" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="Adres yaz ya da ara">
+  </form>
+  <button id="keyboard" class="btn" type="button" aria-label="Klavye"><svg viewBox="0 0 24 24"><path d="M3 6H21V18H3Z M7 10H7.01 M11 10H11.01 M15 10H15.01 M8 14H16"/></svg></button>
+</div>
+<div id="progress"></div>
+<form id="typebar" class="hidden" novalidate>
+  <input id="typeInput" type="text" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="Yazmak için dokun">
+  <button class="pill" type="submit">Git</button>
+  <button id="typeClose" class="pill gray" type="button">Bitti</button>
+</form>
+<div id="screen"><img id="frame" alt=""></div>
+<div id="status" class="hidden"></div>
+<div id="toast" class="hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>
