@@ -12,7 +12,7 @@ ADD --chmod=755 https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY server.js audio.js video.js vstream.js entrypoint.sh ./
+COPY server.js audio.js video.js vstream.js i18n.js entrypoint.sh ./
 COPY public ./public
 
 ENV NODE_ENV=production PORT=8091 DATA_DIR=/data

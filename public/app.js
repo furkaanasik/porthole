@@ -3,6 +3,8 @@
   'use strict';
 
   function $(id) { return document.getElementById(id); }
+  // Interface text, inlined into index.html by the server (i18n.js).
+  var T = window.STRINGS;
 
   var screenEl = $('screen');
   var front = $('frameA');
@@ -64,15 +66,15 @@
       ws = null;
       if (e.code === 4000) {
         replaced = true;
-        showStatus('Başka bir cihazda açıldı. Buraya dönmek için dokun.');
+        showStatus(T.takenOver);
         return;
       }
       // Repeated failures usually mean the Cloudflare login expired; a reload goes through it again.
       if (retries >= 4) {
-        showStatus('Bağlanılamıyor. Sayfayı yenilemek için dokun.');
+        showStatus(T.unreachable);
         return;
       }
-      showStatus('Bağlantı koptu, yeniden bağlanılıyor…');
+      showStatus(T.reconnecting);
       setTimeout(connect, Math.min(8000, 500 * Math.pow(2, retries++)));
     };
   }
@@ -423,7 +425,7 @@
       typeInput.value = field.value || '';
       lastSent = typeInput.value;
     }
-    typeInput.placeholder = field.label || 'Yazmak için dokun';
+    typeInput.placeholder = field.label || T.tapToType;
   }
 
   function closeTypebar() {
@@ -464,7 +466,7 @@
   // frames per second less. Remembered per device.
   var hdBtn = $('hd');
   var hdOn = false;
-  try { hdOn = localStorage.getItem('pencere.hd') === '1'; } catch (e) {}
+  try { hdOn = localStorage.getItem('porthole.hd') === '1'; } catch (e) {}
 
   function sendHd() {
     hdBtn.className = (hdOn ? 'btn on' : 'btn') + (videoMode ? ' hidden' : '');
@@ -473,9 +475,9 @@
 
   onClick('hd', function () {
     hdOn = !hdOn;
-    try { localStorage.setItem('pencere.hd', hdOn ? '1' : '0'); } catch (e) {}
+    try { localStorage.setItem('porthole.hd', hdOn ? '1' : '0'); } catch (e) {}
     sendHd();
-    toast(hdOn ? 'HD açık: kaydırırken de tam kalite.' : 'HD kapalı: kaydırırken akıcılık öncelikli.');
+    toast(hdOn ? T.hdOn : T.hdOff);
   });
 
   // ----------------------------------------------------------------- video
@@ -522,7 +524,7 @@
       },
       error: function (err) {
         // A decoder that broke mid-stream: go back to frames rather than show a frozen picture.
-        toast('Video akışı çözülemedi, kare moduna geçildi.');
+        toast(T.streamFailed);
         setVideoMode(false);
         send({ t: 'stream', video: false });
       }
@@ -559,11 +561,11 @@
   var MAX_AHEAD = 0.8;
 
   function wantSound() {
-    try { return localStorage.getItem('pencere.sound') === '1'; } catch (e) { return false; }
+    try { return localStorage.getItem('porthole.sound') === '1'; } catch (e) { return false; }
   }
 
   function rememberSound(on) {
-    try { localStorage.setItem('pencere.sound', on ? '1' : '0'); } catch (e) {}
+    try { localStorage.setItem('porthole.sound', on ? '1' : '0'); } catch (e) {}
   }
 
   // Must run inside a tap handler: playing a silent buffer there is what unlocks audio on iOS.
@@ -611,7 +613,7 @@
 
   function setSound(on) {
     if (on && !unlockAudio()) {
-      toast('Bu tarayıcı sesi çalamıyor.');
+      toast(T.noSound);
       on = false;
     }
     soundOn = on;
@@ -628,7 +630,7 @@
   onClick('sound', function () {
     setSound(!soundOn);
     rememberSound(soundOn);
-    if (soundOn) toast('Ses açık. iPad sessiz modundaysa ses gelmez.');
+    if (soundOn) toast(T.soundOn);
   });
 
   // With sound left on last time, the first tap on the page turns it back on.
@@ -665,7 +667,7 @@
       toast(m.error);
       return;
     }
-    $('playerTitle').textContent = m.title + (m.live ? ' (canlı)' : '');
+    $('playerTitle').textContent = m.title + (m.live ? ' (' + T.live + ')' : '');
     player.className = '';
     if (playerVideo.canPlayType('application/vnd.apple.mpegurl')) {
       playerVideo.src = m.src;
@@ -680,7 +682,7 @@
   function playWithHlsJs(src) {
     function go() {
       if (!window.Hls || !window.Hls.isSupported()) {
-        toast('Bu tarayıcı videoyu oynatamıyor.');
+        toast(T.noVideo);
         return;
       }
       // The playlist grows while the server is still repackaging, so hls.js would treat it as live

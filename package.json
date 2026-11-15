@@ -1,8 +1,9 @@
 {
-  "name": "pencere",
+  "name": "porthole",
   "version": "0.1.0",
   "private": true,
-  "description": "Remote Chromium for old iPads: the server renders, the iPad shows frames and sends touches.",
+  "license": "MIT",
+  "description": "Browse the modern web on old iPads and iPhones: a remote Chromium streamed to the browser, with sound and video.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

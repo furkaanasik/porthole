@@ -1,6 +1,6 @@
 'use strict';
 
-// Page audio. Chromium plays into the "pencere" PulseAudio null sink (see entrypoint.sh); ffmpeg
+// Page audio. Chromium plays into the "porthole" PulseAudio null sink (see entrypoint.sh); ffmpeg
 // records the sink's monitor as 22.05 kHz mono 16-bit PCM, which goes to listeners in 100 ms
 // chunks. Raw PCM needs no decoder on the iPad, and silent chunks are not sent at all.
 
@@ -18,7 +18,7 @@ function start() {
   ffmpeg = spawn(
     'ffmpeg',
     // The pulse input's timestamps jitter a little; raw PCM output has no use for them, so only fatal errors print.
-    ['-loglevel', 'fatal', '-nostdin', '-f', 'pulse', '-fragment_size', '2048', '-i', 'pencere.monitor',
+    ['-loglevel', 'fatal', '-nostdin', '-f', 'pulse', '-fragment_size', '2048', '-i', 'porthole.monitor',
       '-ac', '1', '-ar', String(RATE), '-f', 's16le', '-'],
     { stdio: ['ignore', 'pipe', 'inherit'] },
   );

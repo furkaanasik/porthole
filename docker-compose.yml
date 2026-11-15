@@ -1,23 +1,24 @@
 services:
-  pencere:
-    build: .
-    image: pencere:local
-    container_name: pencere
+  porthole:
+    image: ghcr.io/furkaanasik/porthole:latest
+    container_name: porthole
     restart: unless-stopped
     init: true # reaps Chromium's child processes
     ports:
-      - "127.0.0.1:8090:8091" # browser.furkanasikdev.com routes to localhost:8090
+      # Localhost only: put an authenticating proxy (Cloudflare Access, Authelia, ...) in front.
+      - "127.0.0.1:8090:8091"
     volumes:
       - ./data:/data # browser profile: cookies and logins survive restarts
-      # Ad and tracker domains resolve to 0.0.0.0, so ad scripts never load and eat the 2 CPUs.
-      # Fetch it before the first start (and to refresh it):
+      # Recommended on small servers: ad and tracker domains resolve to 0.0.0.0, so their scripts
+      # never load and never eat the CPU. Fetch the list first, then uncomment:
       #   curl -fsSL https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts -o blocklist.hosts
-      - ./blocklist.hosts:/etc/hosts:ro
+      # - ./blocklist.hosts:/etc/hosts:ro
     environment:
+      - UI_LANG=${UI_LANG:-en}
+      - LOCALE=${LOCALE:-en-US}
+      - TZ=${TZ:-UTC}
       - HOME_URL=${HOME_URL:-https://duckduckgo.com/}
       - SEARCH_URL=${SEARCH_URL:-https://duckduckgo.com/?q=}
-      - QUALITY=${QUALITY:-60}
-      - IDLE_QUALITY=${IDLE_QUALITY:-85}
       - DEBUG=${DEBUG:-}
     shm_size: 512m
     mem_limit: 1500m

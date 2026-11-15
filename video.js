@@ -9,8 +9,9 @@ const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { T } = require('./i18n');
 
-const VIDEO_DIR = process.env.VIDEO_DIR || '/tmp/pencere-video';
+const VIDEO_DIR = process.env.VIDEO_DIR || '/tmp/porthole-video';
 // yt-dlp's ~= regex is case-sensitive and YouTube writes avc1.4D401F; without (?i) every video
 // fell through to the 360p fallback.
 const IPAD_H264 = "vcodec~='(?i)^avc1\\.(42|4d)'";
@@ -41,19 +42,19 @@ const lastLine = (text) => String(text || '').trim().split('\n').pop() || '';
 
 function friendlyError(message) {
   if (/Unsupported URL|No video formats|no suitable formats/i.test(message)) {
-    return 'Bu sayfada oynatılabilir bir video bulunamadı.';
+    return T.videoNotFound;
   }
   if (/confirm you.re not a bot|Sign in to confirm/i.test(message)) {
-    return 'YouTube robot kontrolü istedi. Pencere içinde YouTube hesabına giriş yapıp tekrar dene.';
+    return T.videoBotCheck;
   }
   if (/logged-in|login required|credentials|members only|private video/i.test(message)) {
-    return 'Bu video giriş istiyor. Pencere içinde siteye giriş yapıp tekrar dene.';
+    return T.videoLogin;
   }
-  return 'Video açılamadı: ' + message.replace(/^ERROR:\s*/, '').slice(0, 200);
+  return T.videoFailed + message.replace(/^ERROR:\s*/, '').slice(0, 200);
 }
 
 // yt-dlp reads cookies in Netscape format; these come from the Chromium profile, so a site the
-// user is logged into in Pencere is logged in for yt-dlp too.
+// user is logged into in Porthole is logged in for yt-dlp too.
 function writeCookies(file, cookies) {
   const lines = ['# Netscape HTTP Cookie File'];
   for (const c of cookies) {

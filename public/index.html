@@ -1,39 +1,39 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="format-detection" content="telephone=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<meta name="apple-mobile-web-app-title" content="Pencere">
+<meta name="apple-mobile-web-app-title" content="Porthole">
 <link rel="apple-touch-icon" href="icon.png">
-<title>Pencere</title>
+<title>Porthole</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div id="toolbar">
-  <button id="back" class="btn" type="button" aria-label="Geri"><svg viewBox="0 0 24 24"><path d="M15 4L7 12L15 20"/></svg></button>
-  <button id="forward" class="btn" type="button" aria-label="İleri"><svg viewBox="0 0 24 24"><path d="M9 4L17 12L9 20"/></svg></button>
-  <button id="reload" class="btn" type="button" aria-label="Yenile"><svg viewBox="0 0 24 24"><path d="M20 12A8 8 0 1 1 17.7 6.3M20 3V8H15"/></svg></button>
-  <button id="home" class="btn" type="button" aria-label="Ana sayfa"><svg viewBox="0 0 24 24"><path d="M3 11L12 3L21 11M6 9V20H18V9"/></svg></button>
+  <button id="back" class="btn" type="button" aria-label="{{back}}"><svg viewBox="0 0 24 24"><path d="M15 4L7 12L15 20"/></svg></button>
+  <button id="forward" class="btn" type="button" aria-label="{{forward}}"><svg viewBox="0 0 24 24"><path d="M9 4L17 12L9 20"/></svg></button>
+  <button id="reload" class="btn" type="button" aria-label="{{reload}}"><svg viewBox="0 0 24 24"><path d="M20 12A8 8 0 1 1 17.7 6.3M20 3V8H15"/></svg></button>
+  <button id="home" class="btn" type="button" aria-label="{{home}}"><svg viewBox="0 0 24 24"><path d="M3 11L12 3L21 11M6 9V20H18V9"/></svg></button>
   <form id="addressForm" novalidate>
-    <input id="address" type="url" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="Adres yaz ya da ara">
+    <input id="address" type="url" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="{{address}}">
   </form>
-  <button id="hd" class="btn" type="button" aria-label="Yüksek kalite"><span>HD</span></button>
-  <button id="sound" class="btn" type="button" aria-label="Ses"><svg viewBox="0 0 24 24"><path d="M4 9H8L13 5V19L8 15H4Z"/><path class="waves" d="M16.5 9A4 4 0 0 1 16.5 15M19 6.5A8 8 0 0 1 19 17.5"/><path class="cross" d="M16 9L22 15M22 9L16 15"/></svg></button>
-  <button id="video" class="btn" type="button" aria-label="Videoyu aç"><svg viewBox="0 0 24 24"><path d="M3 5H21V19H3Z"/><path d="M10 9V15L15 12Z"/></svg></button>
-  <button id="keyboard" class="btn" type="button" aria-label="Klavye"><svg viewBox="0 0 24 24"><path d="M3 6H21V18H3Z M7 10H7.01 M11 10H11.01 M15 10H15.01 M8 14H16"/></svg></button>
+  <button id="hd" class="btn" type="button" aria-label="{{hd}}"><span>HD</span></button>
+  <button id="sound" class="btn" type="button" aria-label="{{sound}}"><svg viewBox="0 0 24 24"><path d="M4 9H8L13 5V19L8 15H4Z"/><path class="waves" d="M16.5 9A4 4 0 0 1 16.5 15M19 6.5A8 8 0 0 1 19 17.5"/><path class="cross" d="M16 9L22 15M22 9L16 15"/></svg></button>
+  <button id="video" class="btn" type="button" aria-label="{{video}}"><svg viewBox="0 0 24 24"><path d="M3 5H21V19H3Z"/><path d="M10 9V15L15 12Z"/></svg></button>
+  <button id="keyboard" class="btn" type="button" aria-label="{{keyboard}}"><svg viewBox="0 0 24 24"><path d="M3 6H21V18H3Z M7 10H7.01 M11 10H11.01 M15 10H15.01 M8 14H16"/></svg></button>
 </div>
 <div id="progress"></div>
 <form id="typebar" class="hidden" novalidate>
-  <input id="typeInput" type="text" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="Yazmak için dokun">
-  <button class="pill" type="submit">Git</button>
-  <button id="typeClose" class="pill gray" type="button">Bitti</button>
+  <input id="typeInput" type="text" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="{{tapToType}}">
+  <button class="pill" type="submit">{{go}}</button>
+  <button id="typeClose" class="pill gray" type="button">{{done}}</button>
 </form>
 <div id="screen"><img id="frameA" class="frame" alt=""><img id="frameB" class="frame" alt="" style="visibility: hidden"><canvas id="canvas" class="frame hidden"></canvas></div>
 <div id="player" class="hidden">
-  <div id="playerBar"><span id="playerTitle"></span><button id="playerClose" class="pill gray" type="button">Kapat</button></div>
+  <div id="playerBar"><span id="playerTitle"></span><button id="playerClose" class="pill gray" type="button">{{close}}</button></div>
   <video id="playerVideo" controls playsinline webkit-playsinline preload="auto"></video>
 </div>
 <div id="status" class="hidden"></div>

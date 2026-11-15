@@ -11,6 +11,7 @@ const { chromium } = require('playwright');
 const { WebSocketServer } = require('ws');
 const audio = require('./audio');
 const video = require('./video');
+const i18n = require('./i18n');
 const vstream = require('./vstream');
 
 const PORT = Number(process.env.PORT) || 8091;
@@ -26,6 +27,8 @@ const IDLE_QUALITY = Number(process.env.IDLE_QUALITY) || 85;
 const STREAM_WIDTH = Number(process.env.STREAM_WIDTH) || 1280;
 const MAX_TABS = 5;
 const CDP_PORT = Number(process.env.CDP_PORT) || 9222;
+// The browser's language: Accept-Language and navigator.language, which sites localize by.
+const LOCALE = process.env.LOCALE || 'en-US';
 const MAX_WIDTH = Number(process.env.MAX_WIDTH) || 1920;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -33,7 +36,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 // would keep running old code; when this changes, it reloads.
 const CLIENT_VERSION = require('crypto')
   .createHash('sha1')
-  .update(['index.html', 'app.js', 'style.css'].map((f) => fs.readFileSync(path.join(PUBLIC_DIR, f))).join('\n'))
+  .update(['index.html', 'app.js', 'style.css'].map((f) => fs.readFileSync(path.join(PUBLIC_DIR, f))).join('\n') + i18n.LANG)
   .digest('hex')
   .slice(0, 12);
 
@@ -436,7 +439,7 @@ const handlers = {
     const p = page;
     // Safari plays HLS natively (the iPad 2, with its tighter limits); others go through hls.js.
     const device = m.native ? 'ipad' : 'desktop';
-    send({ t: 'toast', text: 'Video hazırlanıyor…' });
+    send({ t: 'toast', text: i18n.T.videoPreparing });
     try {
       const v = await video.start(p.url(), { cookies: await context.cookies(), userAgent, device });
       // The iPad plays it now; the page's own copy would only burn CPU.
@@ -523,7 +526,7 @@ const server = http.createServer((req, res) => {
     }
     // Cloudflare caches .js and .css and tells browsers to keep them for 4 hours, whatever the
     // origin says; a version in their URLs makes a new client load new files.
-    if (pathname === '/') body = String(body).replace(/(src|href)="(app\.js|style\.css)"/g, `$1="$2?v=${CLIENT_VERSION}"`);
+    if (pathname === '/') body = i18n.localizeHtml(String(body)).replace(/(src|href)="(app\.js|style\.css)"/g, `$1="$2?v=${CLIENT_VERSION}"`);
     res.writeHead(200, { 'Content-Type': entry[1], 'Cache-Control': 'no-cache' });
     res.end(body);
   });
@@ -588,7 +591,7 @@ setInterval(() => {
   }
 }, 25000);
 
-// Pencere starts Chromium itself rather than through Playwright's launcher: Playwright resizes
+// Porthole starts Chromium itself rather than through Playwright's launcher: Playwright resizes
 // headful windows to fit the viewport, which drops them out of kiosk mode. In kiosk mode (openbox
 // applies the fullscreen) every window, popups included, is chromeless at the top-left of the
 // virtual screen, which is what vstream.js captures. Playwright then connects over CDP.
@@ -601,7 +604,7 @@ function launchChromium(profileDir) {
     `--remote-debugging-port=${CDP_PORT}`,
     '--remote-debugging-address=127.0.0.1',
     '--no-sandbox',
-    '--lang=tr-TR',
+    `--lang=${LOCALE}`,
     // From Playwright's own launch switches: no first-run UI, infobars, sync or updates.
     '--no-first-run',
     '--no-default-browser-check',
